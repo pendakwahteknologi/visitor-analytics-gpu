@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aneka Walk Visitor Monitoring System</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <div class="logo-section">
+                    <h1 class="mall-title">ANEKA WALK</h1>
+                    <p class="mall-subtitle">Shah Alam</p>
+                </div>
+                <div class="header-divider"></div>
+                <div class="system-title">
+                    <h2>Visitor Monitoring System</h2>
+                    <p class="live-indicator">
+                        <span class="live-dot"></span>
+                        <span id="status-text">CONNECTING...</span>
+                    </p>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="datetime">
+                    <div id="current-time" class="time">00:00:00</div>
+                    <div id="current-date" class="date">Loading...</div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Left Side - Video Feed -->
+            <section class="video-section">
+                <div class="video-container">
+                    <img id="video-feed" alt="Live Feed" />
+                    <div id="no-feed" class="no-feed">
+                        <div class="no-feed-content">
+                            <svg class="no-feed-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                            </svg>
+                            <p id="no-feed-text" class="no-feed-text">Connecting to Camera...</p>
+                            <p id="no-feed-subtext" class="no-feed-subtext">Please wait</p>
+                        </div>
+                    </div>
+                    <div class="video-info">
+                        <span class="fps-badge">
+                            <span class="fps-label">FPS:</span>
+                            <span id="fps-value">0</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Period Statistics -->
+                <div class="period-stats-container">
+                    <!-- This Week -->
+                    <div class="period-card">
+                        <div class="period-header">
+                            <svg class="period-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                            <div class="period-title">This Week</div>
+                        </div>
+                        <div class="period-stats">
+                            <div class="period-stat-main">
+                                <div class="period-value" id="week-total">0</div>
+                                <div class="period-label">Total Visitors</div>
+                            </div>
+                            <div class="period-gender">
+                                <div class="period-gender-item male">
+                                    <span class="period-gender-icon">♂</span>
+                                    <span id="week-male">0</span>
+                                </div>
+                                <div class="period-gender-item female">
+                                    <span class="period-gender-icon">♀</span>
+                                    <span id="week-female">0</span>
+                                </div>
+                                <div class="period-gender-item unknown">
+                                    <span class="period-gender-icon">?</span>
+                                    <span id="week-unknown">0</span>
+                                </div>
+                            </div>
+                            <div class="period-age">
+                                <span class="period-age-item" title="Children (0-12)">C:<span id="week-age-children">0</span></span>
+                                <span class="period-age-item" title="Teens (13-17)">T:<span id="week-age-teens">0</span></span>
+                                <span class="period-age-item" title="Young Adults (18-30)">YA:<span id="week-age-young">0</span></span>
+                                <span class="period-age-item" title="Adults (31-50)">A:<span id="week-age-adults">0</span></span>
+                                <span class="period-age-item" title="Seniors (51+)">S:<span id="week-age-seniors">0</span></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- This Month -->
+                    <div class="period-card">
+                        <div class="period-header">
+                            <svg class="period-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                            </svg>
+                            <div class="period-title">This Month</div>
+                        </div>
+                        <div class="period-stats">
+                            <div class="period-stat-main">
+                                <div class="period-value" id="month-total">0</div>
+                                <div class="period-label">Total Visitors</div>
+                            </div>
+                            <div class="period-gender">
+                                <div class="period-gender-item male">
+                                    <span class="period-gender-icon">♂</span>
+                                    <span id="month-male">0</span>
+                                </div>
+                                <div class="period-gender-item female">
+                                    <span class="period-gender-icon">♀</span>
+                                    <span id="month-female">0</span>
+                                </div>
+                                <div class="period-gender-item unknown">
+                                    <span class="period-gender-icon">?</span>
+                                    <span id="month-unknown">0</span>
+                                </div>
+                            </div>
+                            <div class="period-age">
+                                <span class="period-age-item" title="Children (0-12)">C:<span id="month-age-children">0</span></span>
+                                <span class="period-age-item" title="Teens (13-17)">T:<span id="month-age-teens">0</span></span>
+                                <span class="period-age-item" title="Young Adults (18-30)">YA:<span id="month-age-young">0</span></span>
+                                <span class="period-age-item" title="Adults (31-50)">A:<span id="month-age-adults">0</span></span>
+                                <span class="period-age-item" title="Seniors (51+)">S:<span id="month-age-seniors">0</span></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- All Time -->
+                    <div class="period-card">
+                        <div class="period-header">
+                            <svg class="period-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <div class="period-title">All Time</div>
+                        </div>
+                        <div class="period-stats">
+                            <div class="period-stat-main">
+                                <div class="period-value" id="alltime-total">0</div>
+                                <div class="period-label">Total Visitors</div>
+                            </div>
+                            <div class="period-gender">
+                                <div class="period-gender-item male">
+                                    <span class="period-gender-icon">♂</span>
+                                    <span id="alltime-male">0</span>
+                                </div>
+                                <div class="period-gender-item female">
+                                    <span class="period-gender-icon">♀</span>
+                                    <span id="alltime-female">0</span>
+                                </div>
+                                <div class="period-gender-item unknown">
+                                    <span class="period-gender-icon">?</span>
+                                    <span id="alltime-unknown">0</span>
+                                </div>
+                            </div>
+                            <div class="period-age">
+                                <span class="period-age-item" title="Children (0-12)">C:<span id="alltime-age-children">0</span></span>
+                                <span class="period-age-item" title="Teens (13-17)">T:<span id="alltime-age-teens">0</span></span>
+                                <span class="period-age-item" title="Young Adults (18-30)">YA:<span id="alltime-age-young">0</span></span>
+                                <span class="period-age-item" title="Adults (31-50)">A:<span id="alltime-age-adults">0</span></span>
+                                <span class="period-age-item" title="Seniors (51+)">S:<span id="alltime-age-seniors">0</span></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Panel (Minimized) -->
+                <div class="settings-mini">
+                    <label class="setting-label-mini">
+                        <input type="checkbox" id="gender-toggle" class="setting-checkbox">
+                        <span>Gender & Age Detection</span>
+                    </label>
+                    <div class="slider-group-mini">
+                        <span class="slider-label-mini">Confidence:</span>
+                        <input type="range" id="confidence-slider" min="0.3" max="0.9" step="0.05" value="0.5">
+                        <span id="confidence-value" class="slider-value-mini">0.50</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Side - Statistics -->
+            <aside class="stats-section">
+                <!-- Today's Visitors -->
+                <div class="stats-card stats-card-primary">
+                    <div class="stats-card-header">
+                        <h3>Today's Visitors</h3>
+                        <button id="btn-reset-stats" class="btn-icon-only" title="Reset Today's Statistics">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="stats-card-body">
+                        <div class="stat-main">
+                            <div class="stat-icon stat-icon-total">
+                                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                                </svg>
+                            </div>
+                            <div class="stat-content">
+                                <div class="stat-value-large" id="total-visitors">0</div>
+                                <div class="stat-label-large">Total Visitors</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Current Count -->
+                <div class="stats-card">
+                    <div class="stats-card-header">
+                        <h3>Current Count</h3>
+                    </div>
+                    <div class="stats-card-body">
+                        <div class="stat-item-modern">
+                            <div class="stat-icon-small">
+                                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                                </svg>
+                            </div>
+                            <div class="stat-content-small">
+                                <div class="stat-value-medium" id="current-people">0</div>
+                                <div class="stat-label-small">People in View</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Gender Distribution -->
+                <div class="stats-card">
+                    <div class="stats-card-header">
+                        <h3>Gender Distribution</h3>
+                        <span class="badge-today">Today</span>
+                    </div>
+                    <div class="stats-card-body">
+                        <div class="gender-stats">
+                            <div class="gender-stat-item male">
+                                <div class="gender-icon">
+                                    <svg fill="currentColor" viewBox="0 0 24 24">
+                                        <path d="M9 9c0-1.7 1.3-3 3-3s3 1.3 3 3c0 1.7-1.3 3-3 3s-3-1.3-3-3zm3 4c-2.7 0-8 1.3-8 4v2h16v-2c0-2.7-5.3-4-8-4z"/>
+                                    </svg>
+                                </div>
+                                <div class="gender-stat-content">
+                                    <div class="gender-stat-value" id="male-count">0</div>
+                                    <div class="gender-stat-label">Male</div>
+                                    <div class="gender-stat-percent" id="male-percent">0%</div>
+                                </div>
+                            </div>
+                            <div class="gender-divider"></div>
+                            <div class="gender-stat-item female">
+                                <div class="gender-icon">
+                                    <svg fill="currentColor" viewBox="0 0 24 24">
+                                        <path d="M9 9c0-1.7 1.3-3 3-3s3 1.3 3 3c0 1.7-1.3 3-3 3s-3-1.3-3-3zm3 4c-2.7 0-8 1.3-8 4v2h16v-2c0-2.7-5.3-4-8-4z"/>
+                                    </svg>
+                                </div>
+                                <div class="gender-stat-content">
+                                    <div class="gender-stat-value" id="female-count">0</div>
+                                    <div class="gender-stat-label">Female</div>
+                                    <div class="gender-stat-percent" id="female-percent">0%</div>
+                                </div>
+                            </div>
+                            <div class="gender-divider"></div>
+                            <div class="gender-stat-item unknown">
+                                <div class="gender-icon">
+                                    <svg fill="currentColor" viewBox="0 0 24 24">
+                                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/>
+                                    </svg>
+                                </div>
+                                <div class="gender-stat-content">
+                                    <div class="gender-stat-value" id="unknown-count">0</div>
+                                    <div class="gender-stat-label">Unknown</div>
+                                    <div class="gender-stat-percent" id="unknown-percent">0%</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Age Distribution -->
+                <div class="stats-card">
+                    <div class="stats-card-header">
+                        <h3>Age Distribution</h3>
+                        <span class="badge-today">Today</span>
+                    </div>
+                    <div class="stats-card-body">
+                        <div class="age-stats">
+                            <div class="age-stat-row">
+                                <div class="age-stat-item">
+                                    <span class="age-label">Children</span>
+                                    <span class="age-range">(0-12)</span>
+                                    <span class="age-value" id="age-children">0</span>
+                                </div>
+                                <div class="age-stat-item">
+                                    <span class="age-label">Teens</span>
+                                    <span class="age-range">(13-17)</span>
+                                    <span class="age-value" id="age-teens">0</span>
+                                </div>
+                            </div>
+                            <div class="age-stat-row">
+                                <div class="age-stat-item">
+                                    <span class="age-label">Young Adults</span>
+                                    <span class="age-range">(18-30)</span>
+                                    <span class="age-value" id="age-young-adults">0</span>
+                                </div>
+                                <div class="age-stat-item">
+                                    <span class="age-label">Adults</span>
+                                    <span class="age-range">(31-50)</span>
+                                    <span class="age-value" id="age-adults">0</span>
+                                </div>
+                            </div>
+                            <div class="age-stat-row">
+                                <div class="age-stat-item age-stat-full">
+                                    <span class="age-label">Seniors</span>
+                                    <span class="age-range">(51+)</span>
+                                    <span class="age-value" id="age-seniors">0</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Innovation Credit -->
+                <div class="credit-card">
+                    <div class="credit-content">
+                        <div class="credit-icon">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                            </svg>
+                        </div>
+                        <div class="credit-text">
+                            <div class="credit-title">Inovasi oleh</div>
+                            <div class="credit-subtitle">Bahagian Transformasi Digital</div>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
