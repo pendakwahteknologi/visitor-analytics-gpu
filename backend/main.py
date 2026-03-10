@@ -631,13 +631,14 @@ async def detect_all_page():
 async def websocket_detect_all(websocket: WebSocket):
     """Stream CCTV feed with all YOLO26 detections (all 80 classes)."""
     await websocket.accept()
+    ping_task = None
     try:
-        from ultralytics import YOLO
         import base64
         import json as _json_local
         import asyncio
 
-        model = YOLO(YOLO_MODEL)
+        # Reuse the already-loaded model — avoids 10s reload and double VRAM usage
+        model = detection_engine.person_detector.model
         loop = asyncio.get_event_loop()
 
         COLORS = {}
@@ -670,16 +671,22 @@ async def websocket_detect_all(websocket: WebSocket):
             _, buf = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
             return base64.b64encode(buf).decode(), detections
 
-        while True:
-            try:
-                data = await asyncio.wait_for(websocket.receive_text(), timeout=0.04)
-                if data == "ping":
-                    await websocket.send_text("pong")
-            except asyncio.TimeoutError:
-                pass
-            except WebSocketDisconnect:
-                break
+        # Handle pings in a background task so the frame loop is never blocked
+        disconnected = False
 
+        async def ping_receiver():
+            nonlocal disconnected
+            try:
+                while True:
+                    data = await websocket.receive_text()
+                    if data == "ping":
+                        await websocket.send_text("pong")
+            except Exception:
+                disconnected = True
+
+        ping_task = asyncio.ensure_future(ping_receiver())
+
+        while not disconnected:
             frame = cctv_handler.get_frame()
             if frame is None:
                 await asyncio.sleep(0.04)
@@ -696,6 +703,9 @@ async def websocket_detect_all(websocket: WebSocket):
         pass
     except Exception as e:
         logger.error(f"detect-all WebSocket error: {e}")
+    finally:
+        if ping_task and not ping_task.done():
+            ping_task.cancel()
 
 
 if __name__ == "__main__":
