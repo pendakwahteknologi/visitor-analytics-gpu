@@ -35,3 +35,9 @@ backend/backend/
 # OS
 .DS_Store
 Thumbs.db
+
+# Brainstorming session files
+.superpowers/
+
+# Screenshots (not project code)
+screenshot/
