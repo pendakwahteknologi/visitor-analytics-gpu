@@ -21,6 +21,7 @@ class CCTVApp {
         this.liveDot = document.querySelector('.live-dot');
 
         this.btnResetStats = document.getElementById('btn-reset-stats');
+        this.btnDownloadReport = document.getElementById('btn-download-report');
 
         this.confidenceSlider = document.getElementById('confidence-slider');
         this.confidenceValue = document.getElementById('confidence-value');
@@ -111,6 +112,7 @@ class CCTVApp {
 
     bindEvents() {
         this.btnResetStats.addEventListener('click', () => this.resetStats());
+        this.btnDownloadReport.addEventListener('click', () => this.downloadReport());
 
         this.confidenceSlider.addEventListener('input', (e) => {
             this._setText(this.confidenceValue, parseFloat(e.target.value).toFixed(2));
@@ -412,6 +414,9 @@ class CCTVApp {
                 alert('Failed to reset statistics');
             }
         }
+    }
+    downloadReport() {
+        window.location.href = 'stats/export/pdf';
     }
 }
 

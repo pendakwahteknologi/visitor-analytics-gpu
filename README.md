@@ -2,10 +2,10 @@
 
 Real-time CCTV-based visitor counting system with gender and age detection, powered by YOLOv8 and face analysis models.
 
-![Version](https://img.shields.io/badge/version-4.1.0-blue)
+![Version](https://img.shields.io/badge/version-4.2.0-blue)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-77%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-84%20passing-brightgreen)
 
 ---
 
@@ -26,9 +26,10 @@ Real-time CCTV-based visitor counting system with gender and age detection, powe
 - **Security Hardened** — CSP headers, rate limiting, CORS, XSS protection, RTSP credential sanitization
 - **Audit Logging** — Every request logged with IP, method, path, status, duration, and auth method
 - **CSV Export** — Download historical statistics as CSV
+- **PDF Report** — Downloadable PDF with today, weekly, monthly, and all-time stats with daily breakdowns
 - **Nginx Reverse Proxy** — Production deployment behind Nginx with gzip, WebSocket upgrade, and static asset caching
 - **Server Hardening** — Localhost-only binding, systemd watchdog, UFW firewall, logrotate
-- **77 Automated Tests** — Unit, integration, and WebSocket load tests
+- **84 Automated Tests** — Unit, integration, and WebSocket load tests
 
 ---
 
@@ -99,6 +100,7 @@ visitor-stat/
 │   ├── detection.py         # YOLOv8 + InsightFace + DeepFace + VisitorTracker
 │   ├── streaming.py         # WebSocket video streaming
 │   ├── data_storage.py      # SQLite statistics persistence
+│   ├── pdf_report.py        # PDF report generation (ReportLab)
 │   ├── visitor_state.py     # Visitor state persistence + encryption
 │   └── atomic_write.py      # Safe file writing utilities
 ├── frontend/
@@ -292,6 +294,7 @@ Leave both `ADMIN_PASSWORD` and `API_KEY` empty for unauthenticated access (deve
 | `/stats/monthly` | GET | Yes | Monthly aggregated statistics |
 | `/stats/all-time` | GET | Yes | All-time aggregated statistics |
 | `/stats/export` | GET | Yes | Download CSV of all historical data |
+| `/stats/export/pdf` | GET | Yes | Download comprehensive PDF report |
 | `/reset-stats` | POST | Yes | Reset today's statistics |
 | `/stream/start` | POST | Yes | Start CCTV monitoring |
 | `/stream/stop` | POST | Yes | Stop CCTV monitoring |
@@ -346,15 +349,16 @@ source venv/bin/activate
 python -m pytest tests/ -v
 ```
 
-**77 tests** across 9 test files:
+**84 tests** across 10 test files:
 
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
 | `test_detection_utils.py` | 9 | Age groups, Detection dataclass, MIN_FACE_SIZE |
 | `test_visitor_tracker.py` | 12 | Confirmation (1/2/3 detections), re-id, median age, eviction, reset |
-| `test_data_storage.py` | 9 | SQLite save/retrieve, overwrite, aggregation, CSV export, JSON migration |
+| `test_data_storage.py` | 11 | SQLite save/retrieve, overwrite, aggregation, CSV export, JSON migration, daily range |
 | `test_atomic_write.py` | 6 | Round-trip, corruption recovery, nested data, parent dir creation |
-| `test_api.py` | 22 | Health, auth enforcement, settings validation, login flow, security headers |
+| `test_api.py` | 24 | Health, auth enforcement, settings validation, login flow, security headers, PDF export |
+| `test_pdf_report.py` | 3 | PDF generation, empty data, large monthly |
 | `test_cctv_handler.py` | 4 | URL sanitization, exponential backoff |
 | `test_visitor_state.py` | 4 | Persistence round-trip, Fernet encryption |
 | `test_websocket_load.py` | 5 | 10 concurrent clients, rapid connect/disconnect, staggered connections |

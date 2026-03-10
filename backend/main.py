@@ -32,6 +32,7 @@ from cctv_handler import CCTVHandler
 from detection import DetectionEngine
 from streaming import StreamManager
 from data_storage import DataStorage
+from pdf_report import generate_visitor_report
 
 # ---------------------------------------------------------------------------
 # Logging — console + rotating file
@@ -472,6 +473,42 @@ async def export_stats():
         content=csv_content,
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=visitor_stats.csv"}
+    )
+
+
+@app.get("/stats/export/pdf", dependencies=[Depends(require_auth)])
+async def export_pdf():
+    """Export a comprehensive PDF report of all visitor statistics."""
+    today = data_storage.get_today_stats()
+    weekly = data_storage.get_weekly_stats()
+    monthly = data_storage.get_monthly_stats()
+    alltime = data_storage.get_all_time_stats()
+
+    weekly_daily = data_storage.get_daily_range(
+        weekly.get("start_date", ""), weekly.get("end_date", "")
+    )
+    monthly_daily = data_storage.get_daily_range(
+        monthly.get("start_date", ""), monthly.get("end_date", "")
+    )
+
+    now = datetime.now()
+    generated_at = now.strftime("%Y-%m-%d %H:%M:%S")
+    filename = f"Visitor_Report_{now.strftime('%Y-%m-%d')}.pdf"
+
+    pdf_bytes = generate_visitor_report(
+        today=today,
+        weekly=weekly,
+        monthly=monthly,
+        alltime=alltime,
+        weekly_daily=weekly_daily,
+        monthly_daily=monthly_daily,
+        generated_at=generated_at,
+    )
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 

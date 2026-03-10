@@ -168,6 +168,19 @@ class TestStatsEndpoints:
         assert "text/csv" in r.headers["content-type"]
 
 
+class TestPdfExport:
+    def test_pdf_export_requires_auth(self, client):
+        response = client.get("/stats/export/pdf")
+        assert response.status_code == 401
+
+    def test_pdf_export_returns_pdf(self, client):
+        response = client.get("/stats/export/pdf", headers=HEADERS)
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/pdf"
+        assert "attachment" in response.headers.get("content-disposition", "")
+        assert response.content[:5] == b"%PDF-"
+
+
 class TestResetStats:
     def test_reset(self, client):
         r = client.post("/reset-stats", headers=HEADERS)

@@ -289,6 +289,15 @@ class DataStorage:
             rows = conn.execute("SELECT * FROM daily_stats").fetchall()
         return self._aggregate_rows(rows)
 
+    def get_daily_range(self, start_date: str, end_date: str) -> list[Dict]:
+        """Return per-day stats as a list of dicts for the given date range."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM daily_stats WHERE date BETWEEN ? AND ? ORDER BY date",
+                (start_date, end_date),
+            ).fetchall()
+        return [{"date": r["date"], **self._row_to_dict(r)} for r in rows]
+
     def export_csv(self) -> str:
         output = io.StringIO()
         writer = csv.writer(output)

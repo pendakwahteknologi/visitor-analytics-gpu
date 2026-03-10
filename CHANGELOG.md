@@ -2,6 +2,19 @@
 
 All notable changes to the CCTV Detection System will be documented in this file.
 
+## [4.2.0] - 2026-03-10
+
+### PDF Report Download
+
+- **PDF Report Generation** — new `/stats/export/pdf` endpoint generates a multi-section PDF report with Today, This Week, This Month, and All-Time visitor statistics including daily breakdown tables
+- Added "Download Report" button to dashboard (next to Reset button)
+- New `backend/pdf_report.py` module using ReportLab for server-side PDF generation
+- Added `get_daily_range()` method to `DataStorage` for fetching per-day stats
+- Added `reportlab~=4.1` dependency
+- 5 new tests (3 PDF generation + 2 API endpoint)
+
+---
+
 ## [4.1.0] - 2026-03-10
 
 ### Production Infrastructure & Server Hardening

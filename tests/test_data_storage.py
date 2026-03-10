@@ -147,3 +147,25 @@ class TestJSONMigration:
         # JSON file should have been renamed
         assert not json_path.exists()
         assert (tmp_path / "daily_stats.json.migrated").exists()
+
+
+def test_get_daily_range(tmp_path):
+    """get_daily_range returns per-day dicts for a date range."""
+    ds = DataStorage(data_dir=str(tmp_path))
+    ds.save_current_stats(10, 5, 4, {"Children": 1, "Teens": 2, "Young Adults": 3, "Adults": 2, "Seniors": 1, "Unknown": 1}, unknown_count=1)
+    today = ds._get_today_key()
+    rows = ds.get_daily_range(today, today)
+    assert len(rows) == 1
+    assert rows[0]["date"] == today
+    assert rows[0]["total_visitors"] == 10
+    assert rows[0]["male"] == 5
+    assert rows[0]["female"] == 4
+    assert rows[0]["unknown"] == 1
+    assert rows[0]["age_groups"]["Children"] == 1
+
+
+def test_get_daily_range_empty(tmp_path):
+    """get_daily_range returns empty list when no data in range."""
+    ds = DataStorage(data_dir=str(tmp_path))
+    rows = ds.get_daily_range("2020-01-01", "2020-01-07")
+    assert rows == []
