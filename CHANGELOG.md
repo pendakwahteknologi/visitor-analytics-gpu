@@ -2,6 +2,43 @@
 
 All notable changes to the CCTV Detection System will be documented in this file.
 
+## [4.1.0] - 2026-03-10
+
+### Production Infrastructure & Server Hardening
+
+**Nginx reverse proxy, localhost-only binding, server cleanup, and performance tuning for stable production deployment.**
+
+#### Nginx Reverse Proxy
+- Configured Nginx on port 80 as reverse proxy to localhost:8000
+- WebSocket upgrade support (`Upgrade` / `Connection` headers, 86400s read timeout)
+- Gzip compression for JSON, CSS, JavaScript, CSV responses
+- Static asset caching with 7-day expiry and `Cache-Control: public, immutable`
+- Proxy buffering (8k buffer size, 8×16k buffers) for improved throughput
+
+#### Relative URL Paths
+- Changed all HTML/JS from absolute paths (`/static/...`, `/stats`, `/login`) to relative paths
+- Dashboard works correctly both at `http://server:8000/` and behind Nginx at `http://server/`
+- WebSocket URL now computed relative to page path for proxy compatibility
+
+#### Server Hardening
+- Uvicorn bound to `127.0.0.1:8000` (not externally accessible)
+- UFW firewall: removed port 8000, only 22/80/443 open
+- Systemd watchdog: `WatchdogSec=120` with auto-restart on hang
+- File descriptor limit: `LimitNOFILE=65535` for concurrent WebSocket connections
+- Logrotate: daily rotation, 14 days retention, 50MB max, copytruncate
+
+#### Server Cleanup
+- Removed PKNS Laravel application and all related services
+- Purged PHP-FPM, PostgreSQL, Redis, Supervisor packages
+- Freed ~8.7 GB disk and ~1.2 GB RAM
+- Server now runs only the visitor-stat dashboard
+
+#### Performance
+- Reduced `STREAM_FPS` from 15 to 10 for lower CPU usage and smoother streaming
+- Nginx gzip reduces bandwidth for API responses and static assets
+
+---
+
 ## [4.0.0] - 2026-03-10
 
 ### Security, Stability & Accuracy Overhaul

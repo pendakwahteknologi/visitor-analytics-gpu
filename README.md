@@ -2,7 +2,7 @@
 
 Real-time CCTV-based visitor counting system with gender and age detection, powered by YOLOv8 and face analysis models.
 
-![Version](https://img.shields.io/badge/version-4.0.0-blue)
+![Version](https://img.shields.io/badge/version-4.1.0-blue)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Tests](https://img.shields.io/badge/tests-77%20passing-brightgreen)
@@ -26,6 +26,8 @@ Real-time CCTV-based visitor counting system with gender and age detection, powe
 - **Security Hardened** — CSP headers, rate limiting, CORS, XSS protection, RTSP credential sanitization
 - **Audit Logging** — Every request logged with IP, method, path, status, duration, and auth method
 - **CSV Export** — Download historical statistics as CSV
+- **Nginx Reverse Proxy** — Production deployment behind Nginx with gzip, WebSocket upgrade, and static asset caching
+- **Server Hardening** — Localhost-only binding, systemd watchdog, UFW firewall, logrotate
 - **77 Automated Tests** — Unit, integration, and WebSocket load tests
 
 ---
@@ -50,6 +52,15 @@ Real-time CCTV-based visitor counting system with gender and age detection, powe
          │
          v
 ┌──────────────────────────────────────┐
+│         Nginx (Port 80)              │
+│  ├─ Reverse Proxy → localhost:8000   │
+│  ├─ Gzip Compression                │
+│  ├─ WebSocket Upgrade               │
+│  └─ Static Asset Caching (7d)       │
+└────────┬─────────────────────────────┘
+         │
+         v
+┌──────────────────────────────────────┐
 │          Web Dashboard               │
 │  ├─ Login Page (session cookie)      │
 │  ├─ Live Video Feed                  │
@@ -65,13 +76,14 @@ Real-time CCTV-based visitor counting system with gender and age detection, powe
 
 | Component | Technology |
 |-----------|------------|
-| Backend | Python 3.12, FastAPI, Uvicorn |
+| Backend | Python 3.12, FastAPI, Uvicorn (localhost:8000) |
 | ML Models | YOLOv8n, InsightFace (buffalo_l), DeepFace |
 | Storage | SQLite (WAL mode), Atomic JSON writes |
 | Auth | Session cookies (HMAC-SHA256) + API key |
 | Encryption | Fernet (optional, for embeddings at rest) |
 | Streaming | WebSocket, JPEG encoding |
 | Frontend | HTML5, CSS3, Vanilla JavaScript |
+| Reverse Proxy | Nginx (port 80 → localhost:8000) |
 | Testing | pytest, httpx, websockets, pytest-asyncio |
 
 ---
@@ -163,12 +175,12 @@ visitor-stat/
 
    ```bash
    cd backend
-   uvicorn main:app --host 0.0.0.0 --port 8000
+   uvicorn main:app --host 127.0.0.1 --port 8000
    ```
 
 6. **Open the dashboard**
 
-   Navigate to `http://localhost:8000`. If `ADMIN_PASSWORD` is set, you'll see the login page.
+   Navigate to `http://localhost:8000` (direct) or `http://<server-ip>/` (via Nginx). If `ADMIN_PASSWORD` is set, you'll see the login page.
 
 ---
 
@@ -198,7 +210,7 @@ All configuration is done via environment variables in the `.env` file:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `STREAM_FPS` | Streaming frame rate | `15` |
+| `STREAM_FPS` | Streaming frame rate | `10` |
 | `JPEG_QUALITY` | JPEG compression quality (0–100) | `65` |
 
 ### Server
@@ -316,7 +328,7 @@ Leave both `ADMIN_PASSWORD` and `API_KEY` empty for unauthenticated access (deve
 
 | Metric | Value |
 |--------|-------|
-| Detection FPS | 12–15 |
+| Detection FPS | 8–10 |
 | Latency | < 500ms |
 | Bandwidth | 2–3 Mbps |
 | CPU Usage | 40–60% |
@@ -351,7 +363,24 @@ python -m pytest tests/ -v
 
 ## Production Deployment
 
-The system runs as a systemd service:
+### Infrastructure
+
+The production server runs on Ubuntu 22.04 with the following stack:
+
+```
+Internet → UFW Firewall (22, 80, 443) → Nginx (port 80) → Uvicorn (localhost:8000)
+```
+
+| Component | Configuration |
+|-----------|--------------|
+| **Nginx** | Reverse proxy on port 80, gzip compression, WebSocket upgrade, static asset caching (7d) |
+| **Uvicorn** | Bound to `127.0.0.1:8000` (not externally accessible) |
+| **Systemd** | `visitor-stat.service` with WatchdogSec=120, auto-restart, LimitNOFILE=65535 |
+| **UFW** | Only ports 22 (SSH), 80 (HTTP), 443 (HTTPS) open |
+| **Logrotate** | Daily rotation, 14 days retention, 50MB max per file |
+| **Cron** | Midnight daily restart via `restart-services.sh` |
+
+### Service Management
 
 ```bash
 # Check status
@@ -365,9 +394,10 @@ journalctl -u visitor-stat -f
 
 # Application logs
 tail -f logs/visitor-stat.log
-```
 
-A midnight cron job (`restart-services.sh`) restarts the service daily for clean state.
+# Nginx logs
+tail -f /var/log/nginx/access.log
+```
 
 ---
 

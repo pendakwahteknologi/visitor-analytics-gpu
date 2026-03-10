@@ -149,7 +149,7 @@ class CCTVApp {
 
     _checkAuth(response) {
         if (response.status === 401) {
-            window.location.href = '/login';
+            window.location.href = 'login';
             return false;
         }
         return true;
@@ -157,7 +157,7 @@ class CCTVApp {
 
     async loadSettings() {
         try {
-            const response = await fetch('/settings', { headers: this._headers() });
+            const response = await fetch('settings', { headers: this._headers() });
             if (!this._checkAuth(response)) return;
             const settings = await response.json();
 
@@ -171,7 +171,7 @@ class CCTVApp {
 
     async updateSettings(settings) {
         try {
-            await fetch('/settings', {
+            await fetch('settings', {
                 method: 'POST',
                 headers: this._headers(),
                 body: JSON.stringify(settings)
@@ -183,7 +183,9 @@ class CCTVApp {
 
     connectWebSocket() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        let wsUrl = `${protocol}//${window.location.host}/ws/stream`;
+        // Build WS URL relative to current page path (works behind reverse proxy)
+        const basePath = window.location.pathname.replace(/\/?$/, '/');
+        let wsUrl = `${protocol}//${window.location.host}${basePath}ws/stream`;
         // API key only needed for programmatic access; browser sends session cookie automatically
         if (this.apiKey) wsUrl += `?api_key=${encodeURIComponent(this.apiKey)}`;
 
@@ -287,7 +289,7 @@ class CCTVApp {
 
     async fetchStats() {
         try {
-            const response = await fetch('/stats', { headers: this._headers() });
+            const response = await fetch('stats', { headers: this._headers() });
             if (!this._checkAuth(response)) return;
             const stats = await response.json();
 
@@ -331,9 +333,9 @@ class CCTVApp {
         try {
             const hdrs = this._headers();
             const [weeklyRes, monthlyRes, alltimeRes] = await Promise.all([
-                fetch('/stats/weekly', { headers: hdrs }),
-                fetch('/stats/monthly', { headers: hdrs }),
-                fetch('/stats/all-time', { headers: hdrs })
+                fetch('stats/weekly', { headers: hdrs }),
+                fetch('stats/monthly', { headers: hdrs }),
+                fetch('stats/all-time', { headers: hdrs })
             ]);
 
             if (!this._checkAuth(weeklyRes) || !this._checkAuth(monthlyRes) || !this._checkAuth(alltimeRes)) return;
@@ -388,7 +390,7 @@ class CCTVApp {
     async resetStats() {
         if (confirm('Reset today\'s visitor statistics?')) {
             try {
-                await fetch('/reset-stats', { method: 'POST', headers: this._headers() });
+                await fetch('reset-stats', { method: 'POST', headers: this._headers() });
 
                 this._setText(this.totalVisitors, '0');
                 this._setText(this.maleCount, '0');
