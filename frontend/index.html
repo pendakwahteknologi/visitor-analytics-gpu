@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aneka Walk Visitor Monitoring System</title>
-    <link rel="stylesheet" href="static/css/style.css">
+    <link rel="stylesheet" href="static/css/style.css?v=4.2.1">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -190,16 +190,18 @@
                 <div class="stats-card stats-card-primary">
                     <div class="stats-card-header">
                         <h3>Today's Visitors</h3>
-                        <div style="display: flex; gap: 0.5rem;">
-                            <button id="btn-download-report" class="btn-icon-only" title="Download PDF Report">
+                        <div style="display: flex; gap: 0.4rem;">
+                            <button id="btn-download-report" class="btn-label" title="Download PDF Report">
                                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                                 </svg>
+                                Download Report
                             </button>
-                            <button id="btn-reset-stats" class="btn-icon-only" title="Reset Today's Statistics">
+                            <button id="btn-reset-stats" class="btn-label" title="Reset Today's Statistics">
                                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                                 </svg>
+                                Reset Stats
                             </button>
                         </div>
                     </div>
@@ -349,6 +351,6 @@
         </main>
     </div>
 
-    <script src="static/js/app.js"></script>
+    <script src="static/js/app.js?v=4.2.1"></script>
 </body>
 </html>
