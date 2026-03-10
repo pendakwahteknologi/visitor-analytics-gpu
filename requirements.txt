@@ -3,14 +3,14 @@ uvicorn~=0.32.0
 python-dotenv~=1.0.1
 opencv-python~=4.10.0
 numpy~=1.26.4
-ultralytics~=8.3.0
+ultralytics~=8.4.21
 insightface~=0.7.3
-deepface~=0.0.93
-onnxruntime~=1.19.0
-Pillow~=10.4.0
-cryptography~=43.0.0
-python-multipart~=0.0.12
-reportlab~=4.1
+deepface~=0.0.99
+onnxruntime-gpu~=1.20.0
+Pillow~=11.0.0
+cryptography~=44.0.0
+python-multipart~=0.0.22
+reportlab~=4.4
 
 # Test dependencies
 pytest~=8.3.0
