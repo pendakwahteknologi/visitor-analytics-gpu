@@ -6,6 +6,7 @@ import time
 import hmac
 import hashlib
 import secrets
+import threading
 import json as _json
 from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
@@ -75,16 +76,18 @@ class RateLimiter:
         self.rate = requests_per_second
         self.burst = burst
         self._buckets: dict = defaultdict(lambda: {"tokens": burst, "last": time.monotonic()})
+        self._lock = threading.Lock()
 
     def allow(self, key: str) -> bool:
         now = time.monotonic()
-        bucket = self._buckets[key]
-        elapsed = now - bucket["last"]
-        bucket["tokens"] = min(self.burst, bucket["tokens"] + elapsed * self.rate)
-        bucket["last"] = now
-        if bucket["tokens"] >= 1:
-            bucket["tokens"] -= 1
-            return True
+        with self._lock:
+            bucket = self._buckets[key]
+            elapsed = now - bucket["last"]
+            bucket["tokens"] = min(self.burst, bucket["tokens"] + elapsed * self.rate)
+            bucket["last"] = now
+            if bucket["tokens"] >= 1:
+                bucket["tokens"] -= 1
+                return True
         return False
 
 rate_limiter = RateLimiter()
@@ -108,7 +111,7 @@ def _verify_session_token(token: str) -> str | None:
     """Verify session token. Returns username if valid, None otherwise."""
     if not token:
         return None
-    parts = token.split(":")
+    parts = token.rsplit(":", 2)
     if len(parts) != 3:
         return None
     username, expires_str, sig = parts
@@ -140,7 +143,17 @@ audit_logger = logging.getLogger("audit")
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Add security headers including CSP and cache-control to every response."""
     async def dispatch(self, request: Request, call_next):
+        # Handle Chrome Private Network Access preflight
+        if request.method == "OPTIONS" and "access-control-request-private-network" in request.headers:
+            response = Response(status_code=204)
+            response.headers["Access-Control-Allow-Private-Network"] = "true"
+            response.headers["Access-Control-Allow-Origin"] = request.headers.get("origin", "*")
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "X-API-Key, Content-Type"
+            return response
+
         response: Response = await call_next(request)
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -209,7 +222,7 @@ def _check_auth(request: Request):
     # 2. Check API key
     if API_KEY:
         key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
-        if key == API_KEY:
+        if key and hmac.compare_digest(key, API_KEY):
             return
 
     raise HTTPException(status_code=401, detail="Authentication required")
@@ -360,7 +373,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
     if not _is_auth_required():
         return RedirectResponse(url="/", status_code=302)
 
-    if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+    if hmac.compare_digest(username, ADMIN_USERNAME) and hmac.compare_digest(password, ADMIN_PASSWORD):
         token = _create_session_token(username)
         response = RedirectResponse(url="/", status_code=302)
         response.set_cookie(
@@ -377,10 +390,11 @@ async def login(request: Request, username: str = Form(...), password: str = For
     logger.warning(f"Failed login attempt for '{username}' from {request.client.host}")
     login_path = os.path.join(frontend_path, "login.html")
     if os.path.exists(login_path):
-        content = open(login_path).read().replace(
-            "<!--ERROR_PLACEHOLDER-->",
-            '<div class="login-error">Invalid username or password</div>'
-        )
+        with open(login_path) as _f:
+            content = _f.read().replace(
+                "<!--ERROR_PLACEHOLDER-->",
+                '<div class="login-error">Invalid username or password</div>'
+            )
         return HTMLResponse(content, status_code=401)
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
@@ -582,6 +596,106 @@ async def websocket_stream(websocket: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         stream_manager.connection_manager.disconnect(websocket)
+
+
+@app.get("/rootCA.pem", include_in_schema=False)
+async def download_ca():
+    """Serve the mkcert root CA certificate for client installation."""
+    ca_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "certs", "rootCA.pem")
+    return FileResponse(ca_path, media_type="application/x-pem-file", filename="visitor-analytics-CA.pem")
+
+
+@app.get("/proxy.pac", include_in_schema=False)
+async def proxy_pac():
+    """Serve a PAC file that bypasses proxy for this server."""
+    pac = """function FindProxyForURL(url, host) {
+    if (host === "visitor-analysis.local") return "DIRECT";
+    if (isInNet(dnsResolve(host), "10.0.0.0", "255.0.0.0") ||
+        isInNet(dnsResolve(host), "172.16.0.0", "255.240.0.0") ||
+        isInNet(dnsResolve(host), "192.168.0.0", "255.255.0.0")) return "DIRECT";
+    return "USEPROXY";
+}"""
+    return PlainTextResponse(pac, media_type="application/x-ns-proxy-autoconfig")
+
+
+@app.get("/detect-all")
+async def detect_all_page():
+    """Serve the YOLO26 all-classes detection explorer page."""
+    page_path = os.path.join(frontend_path, "detect-all.html")
+    if os.path.exists(page_path):
+        return FileResponse(page_path)
+    raise HTTPException(status_code=404, detail="Page not found")
+
+
+@app.websocket("/ws/detect-all")
+async def websocket_detect_all(websocket: WebSocket):
+    """Stream CCTV feed with all YOLO26 detections (all 80 classes)."""
+    await websocket.accept()
+    try:
+        from ultralytics import YOLO
+        import base64
+        import json as _json_local
+        import asyncio
+
+        model = YOLO(YOLO_MODEL)
+        loop = asyncio.get_event_loop()
+
+        COLORS = {}
+        def get_color(cls_id):
+            if cls_id not in COLORS:
+                import colorsys
+                hue = (cls_id * 37) % 180 / 180.0
+                r, g, b = colorsys.hsv_to_rgb(hue, 0.8, 0.95)
+                COLORS[cls_id] = (int(b * 255), int(g * 255), int(r * 255))
+            return COLORS[cls_id]
+
+        def process_frame(frame):
+            results = model(frame, verbose=False, imgsz=1280, half=True, device=0, conf=0.3)
+            detections = []
+            annotated = frame.copy()
+            for result in results:
+                for box in (result.boxes or []):
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                    conf = float(box.conf[0])
+                    cls_id = int(box.cls[0])
+                    cls_name = model.names.get(cls_id, str(cls_id))
+                    color = get_color(cls_id)
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                    label = f"{cls_name} {conf:.0%}"
+                    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+                    cv2.rectangle(annotated, (x1, y1 - th - 6), (x1 + tw + 4, y1), color, -1)
+                    cv2.putText(annotated, label, (x1 + 2, y1 - 4),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                    detections.append({"cls": cls_name, "conf": round(conf, 2)})
+            _, buf = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            return base64.b64encode(buf).decode(), detections
+
+        while True:
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=0.04)
+                if data == "ping":
+                    await websocket.send_text("pong")
+            except asyncio.TimeoutError:
+                pass
+            except WebSocketDisconnect:
+                break
+
+            frame = cctv_handler.get_frame()
+            if frame is None:
+                await asyncio.sleep(0.04)
+                continue
+
+            b64, detections = await loop.run_in_executor(None, process_frame, frame)
+            msg = _json_local.dumps({"type": "frame", "data": b64, "detections": detections})
+            try:
+                await websocket.send_text(msg)
+            except Exception:
+                break
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"detect-all WebSocket error: {e}")
 
 
 if __name__ == "__main__":

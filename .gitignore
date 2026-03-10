@@ -41,3 +41,7 @@ Thumbs.db
 
 # Screenshots (not project code)
 screenshot/
+
+# SSL certificates (private keys must not be committed)
+certs/key.pem
+certs/rootCA-key.pem

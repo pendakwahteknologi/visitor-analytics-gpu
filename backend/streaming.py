@@ -128,6 +128,7 @@ class StreamManager:
 
         # Register callback for CCTV state changes
         self.cctv_handler.add_state_callback(self._on_cctv_state_change)
+        self._event_loop = asyncio.get_event_loop()
 
         self.streaming = True
         self.stream_task = asyncio.create_task(self._stream_loop())
@@ -136,7 +137,7 @@ class StreamManager:
     def _on_cctv_state_change(self, state: str, message: str):
         """Callback for CCTV connection state changes."""
         try:
-            loop = asyncio.get_event_loop()
+            loop = getattr(self, "_event_loop", None) or asyncio.get_event_loop()
             if loop.is_running():
                 asyncio.run_coroutine_threadsafe(
                     self.connection_manager.broadcast_status({
@@ -167,8 +168,8 @@ class StreamManager:
         fps_counter = 0
         fps_timer = time.time()
         frame_counter = 0
-        detection_interval = 2  # Run person detection every N frames
-        analysis_interval = 5  # Run face analysis less frequently
+        detection_interval = 2  # Run person detection every 2 frames (yolov8x+imgsz1280 is heavy)
+        analysis_interval = 4  # Run face analysis every 4 frames
         last_detections = []
         last_stats = {
             "total_people": 0, "male": 0, "female": 0, "unknown": 0,
@@ -210,8 +211,16 @@ class StreamManager:
 
                     # Only run face analysis on fresh detection frames
                     if self.detection_engine.enable_gender and is_analysis_frame:
-                        for det in detections:
-                            analysis = self.detection_engine.face_analyzer.analyze(resized_frame, det.bbox)
+                        loop = asyncio.get_event_loop()
+                        raw_results = await asyncio.gather(*[
+                            loop.run_in_executor(None, self.detection_engine.face_analyzer.analyze, resized_frame, det.bbox)
+                            for det in detections
+                        ], return_exceptions=True)
+                        analyses = [
+                            r if not isinstance(r, Exception) else {"gender": None, "gender_confidence": 0.0, "age": None, "age_group": "Unknown", "embedding": None}
+                            for r in raw_results
+                        ]
+                        for det, analysis in zip(detections, analyses):
                             det.gender = analysis["gender"]
                             det.gender_confidence = analysis["gender_confidence"]
                             det.age = analysis["age"]

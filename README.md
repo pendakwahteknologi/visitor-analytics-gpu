@@ -1,35 +1,51 @@
-# Visitor Analytics
+# Visitor Analytics GPU
 
-Real-time CCTV-based visitor counting system with gender and age detection, powered by YOLOv8 and face analysis models.
+Real-time CCTV-based visitor counting system with gender and age detection, fully GPU-accelerated using YOLO26 and InsightFace on NVIDIA hardware.
 
-![Version](https://img.shields.io/badge/version-4.2.0-blue)
+![Version](https://img.shields.io/badge/version-5.0.0-blue)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
+![GPU](https://img.shields.io/badge/GPU-NVIDIA%20CUDA-green)
+![YOLO](https://img.shields.io/badge/YOLO-YOLO26x-purple)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Tests](https://img.shields.io/badge/tests-84%20passing-brightgreen)
 
 ---
 
+## What's New in v5.0.0 (GPU Edition)
+
+| Improvement | Detail |
+|---|---|
+| **YOLO26x** | Upgraded from YOLOv8n → YOLO26x (latest Ultralytics model, NMS-free inference) |
+| **Full GPU Acceleration** | YOLO26 + InsightFace + ONNX Runtime all running on CUDA |
+| **FP16 Inference** | Half-precision for 2× faster GPU throughput |
+| **Higher Resolution** | Detection at imgsz=1280 (was 640) — detects people far from camera |
+| **InsightFace 1024px** | Face det_size upgraded from 640×640 → 1024×1024 |
+| **Parallel Face Analysis** | All faces in a frame analysed concurrently via async thread pool |
+| **HTTPS by Default** | mkcert SSL certificate, HTTP auto-redirects to HTTPS |
+| **mDNS Hostname** | Access via `https://visitor-analysis.local` regardless of DHCP IP |
+| **YOLO26 Explorer Page** | New `/detect-all` page showing all 80 COCO classes live |
+| **Security Fixes** | Timing attack fixes, thread safety, async error handling |
+
+---
+
 ## Features
 
-- **Real-time Person Detection** — YOLOv8n for fast and accurate person detection
-- **Gender Classification** — Ensemble approach using InsightFace + DeepFace with weighted majority voting
-- **Age Detection** — 5 age groups (Children, Teens, Young Adults, Adults, Seniors) with median aggregation
+- **Real-time Person Detection** — YOLO26x at imgsz=1280 with FP16 on GPU
+- **Gender & Age Classification** — InsightFace (buffalo_l) + DeepFace ensemble with GPU acceleration
 - **Face Re-identification** — Multi-biometric fusion (face 60% + gender 20% + age 10% + temporal 10%) prevents double-counting
-- **Confirmation System** — Visitors must be detected 3 times before counting, eliminating false positives
-- **Live Video Stream** — WebSocket-based streaming with JPEG encoding
-- **Modern Dashboard** — Dark-themed responsive UI optimized for large displays
-- **Login Authentication** — Session-based login with HMAC-signed cookies for browser access
-- **API Key Auth** — Header-based API key for programmatic/external access
-- **SQLite Storage** — WAL-mode database with automatic JSON migration for historical statistics
-- **Embedding Encryption** — Optional Fernet encryption for face embeddings at rest
-- **Crash Resilience** — Atomic file writes, signal handlers, and auto-save every 30 seconds
-- **Security Hardened** — CSP headers, rate limiting, CORS, XSS protection, RTSP credential sanitization
+- **Confirmation System** — Visitors must be detected 3× before counting, eliminating false positives
+- **Live Video Stream** — WebSocket-based streaming at 25 FPS, JPEG quality 90%
+- **YOLO26 Explorer** — Dedicated page showing all 80 detectable COCO classes on the live feed
+- **Modern Dashboard** — Dark-themed responsive UI for large displays
+- **HTTPS** — mkcert SSL, HTTP→HTTPS redirect, works on any DHCP network
+- **mDNS** — `visitor-analysis.local` resolves automatically on LAN (no DNS config needed)
+- **Login Authentication** — Session-based login with HMAC-signed cookies
+- **API Key Auth** — Header-based API key for programmatic access
+- **SQLite Storage** — WAL-mode database with automatic JSON migration
+- **PDF & CSV Reports** — Downloadable reports with historical statistics
+- **Crash Resilience** — Atomic file writes, signal handlers, auto-save every 30 seconds
+- **Security Hardened** — CSP headers, rate limiting, timing-attack-safe comparisons, thread-safe ID generation
 - **Audit Logging** — Every request logged with IP, method, path, status, duration, and auth method
-- **CSV Export** — Download historical statistics as CSV
-- **PDF Report** — Downloadable PDF with today, weekly, monthly, and all-time stats with daily breakdowns
-- **Nginx Reverse Proxy** — Production deployment behind Nginx with gzip, WebSocket upgrade, and static asset caching
-- **Server Hardening** — Localhost-only binding, systemd watchdog, UFW firewall, logrotate
-- **84 Automated Tests** — Unit, integration, and WebSocket load tests
 
 ---
 
@@ -37,54 +53,67 @@ Real-time CCTV-based visitor counting system with gender and age detection, powe
 
 ```
 ┌─────────────────┐
-│   CCTV Camera   │  RTSP Stream
+│   CCTV Camera   │  RTSP Stream (main stream, Channel 101)
 └────────┬────────┘
          │
-         v
-┌──────────────────────────────────────┐
-│           Python Server              │
-│  ├─ YOLOv8n (Person Detection)       │
-│  ├─ InsightFace + DeepFace (Demographics)
-│  ├─ VisitorTracker (Re-identification)
-│  ├─ SQLite (Statistics Storage)      │
-│  ├─ FastAPI + WebSocket              │
-│  └─ Session/API Key Auth             │
-└────────┬─────────────────────────────┘
+         ▼
+┌──────────────────────────────────────────┐
+│           Python / FastAPI Server        │
+│  ├─ YOLO26x (Person Detection, GPU FP16) │
+│  ├─ InsightFace buffalo_l (GPU CUDA)     │
+│  ├─ DeepFace (Gender/Age ensemble)       │
+│  ├─ VisitorTracker (Re-identification)   │
+│  ├─ SQLite WAL (Statistics)              │
+│  ├─ WebSocket Streaming (25 FPS)         │
+│  └─ HTTPS (mkcert, port 443)             │
+└────────┬─────────────────────────────────┘
          │
-         v
-┌──────────────────────────────────────┐
-│         Nginx (Port 80)              │
-│  ├─ Reverse Proxy → localhost:8000   │
-│  ├─ Gzip Compression                │
-│  ├─ WebSocket Upgrade               │
-│  └─ Static Asset Caching (7d)       │
-└────────┬─────────────────────────────┘
+         ▼
+┌──────────────────────────────────────────┐
+│   mDNS (Avahi) — visitor-analysis.local  │
+│   HTTP :80 → HTTPS :443 redirect         │
+└────────┬─────────────────────────────────┘
          │
-         v
-┌──────────────────────────────────────┐
-│          Web Dashboard               │
-│  ├─ Login Page (session cookie)      │
-│  ├─ Live Video Feed                  │
-│  ├─ Today / Weekly / Monthly / All-time Stats
-│  ├─ Gender & Age Distribution        │
-│  └─ Settings & Controls              │
-└──────────────────────────────────────┘
+         ▼
+┌──────────────────────────────────────────┐
+│          Web Dashboard                   │
+│  ├─ https://visitor-analysis.local/      │
+│  ├─ https://visitor-analysis.local/detect-all
+│  ├─ Live Video Feed (25 FPS)             │
+│  ├─ Today / Weekly / Monthly / All-time  │
+│  ├─ Gender & Age Distribution            │
+│  └─ PDF / CSV Export                     │
+└──────────────────────────────────────────┘
 ```
+
+---
+
+## Hardware Requirements
+
+| Component | Minimum | Recommended |
+|---|---|---|
+| GPU | NVIDIA GTX 1060 6GB | NVIDIA RTX A2000 or better |
+| CUDA | 11.8+ | 12.x |
+| RAM | 4 GB | 8 GB |
+| CPU | 4 cores | 8 cores |
+| Python | 3.10+ | 3.12 |
 
 ---
 
 ## Tech Stack
 
 | Component | Technology |
-|-----------|------------|
-| Backend | Python 3.12, FastAPI, Uvicorn (localhost:8000) |
-| ML Models | YOLOv8n, InsightFace (buffalo_l), DeepFace |
+|---|---|
+| Backend | Python 3.12, FastAPI, Uvicorn |
+| Object Detection | YOLO26x (Ultralytics 8.4+), FP16, GPU |
+| Face Analysis | InsightFace buffalo_l (CUDA), DeepFace |
+| ONNX Runtime | onnxruntime-gpu (CUDAExecutionProvider) |
 | Storage | SQLite (WAL mode), Atomic JSON writes |
 | Auth | Session cookies (HMAC-SHA256) + API key |
-| Encryption | Fernet (optional, for embeddings at rest) |
-| Streaming | WebSocket, JPEG encoding |
+| Streaming | WebSocket, JPEG encoding, 25 FPS |
 | Frontend | HTML5, CSS3, Vanilla JavaScript |
-| Reverse Proxy | Nginx (port 80 → localhost:8000) |
+| HTTPS | mkcert (locally trusted CA) |
+| mDNS | Avahi daemon (`visitor-analysis.local`) |
 | Testing | pytest, httpx, websockets, pytest-asyncio |
 
 ---
@@ -92,323 +121,281 @@ Real-time CCTV-based visitor counting system with gender and age detection, powe
 ## Project Structure
 
 ```
-visitor-stat/
+visitor-analytics-gpu/
 ├── backend/
-│   ├── main.py              # FastAPI app, middleware, auth, endpoints
+│   ├── main.py              # FastAPI app, middleware, auth, endpoints, YOLO26 explorer
 │   ├── config.py            # Configuration from environment
 │   ├── cctv_handler.py      # CCTV camera connection (RTSP)
-│   ├── detection.py         # YOLOv8 + InsightFace + DeepFace + VisitorTracker
-│   ├── streaming.py         # WebSocket video streaming
+│   ├── detection.py         # YOLO26 + InsightFace + DeepFace + VisitorTracker
+│   ├── streaming.py         # WebSocket video streaming (async parallel face analysis)
 │   ├── data_storage.py      # SQLite statistics persistence
 │   ├── pdf_report.py        # PDF report generation (ReportLab)
 │   ├── visitor_state.py     # Visitor state persistence + encryption
 │   └── atomic_write.py      # Safe file writing utilities
 ├── frontend/
 │   ├── index.html           # Dashboard UI
-│   └── login.html           # Login page
+│   ├── login.html           # Login page
+│   └── detect-all.html      # YOLO26 all-classes explorer
 ├── static/
 │   ├── css/style.css        # Dark theme styling
 │   └── js/app.js            # Dashboard logic
-├── tests/
-│   ├── conftest.py          # Shared fixtures
-│   ├── test_detection_utils.py   # Age groups, Detection dataclass, face size
-│   ├── test_visitor_tracker.py   # Confirmation, re-id, median age, eviction
-│   ├── test_data_storage.py      # SQLite CRUD, aggregation, CSV, migration
-│   ├── test_atomic_write.py      # Round-trip, corruption recovery
-│   ├── test_api.py               # Endpoints, auth, login flow, security headers
-│   ├── test_cctv_handler.py      # URL sanitization, reconnection backoff
-│   ├── test_visitor_state.py     # Persistence, Fernet encryption
-│   └── test_websocket_load.py    # Concurrent WebSocket clients
+├── certs/                   # SSL certificates (mkcert, not committed)
+├── tests/                   # 84 automated tests
 ├── .env.example             # Environment variable template
-├── requirements.txt         # Python dependencies (pinned ~=)
-├── run.sh                   # Dev startup script
-├── restart-services.sh      # Production restart script
-├── TODO.md                  # Completed task tracker
-└── README.md
+├── requirements.txt         # Python dependencies
+└── run.sh                   # Dev startup script
 ```
 
 ---
 
-## Getting Started
+## Installation
 
-### Prerequisites
+### 1. Prerequisites
 
-- Python 3.10+
-- RTSP-compatible CCTV camera
-- ~2GB RAM available
+```bash
+# Ubuntu 22.04+ with NVIDIA GPU
+python3 --version   # 3.10+
+nvidia-smi          # CUDA driver installed
+```
 
-### Installation
+### 2. Clone & Setup
 
-1. **Clone the repository**
+```bash
+git clone https://github.com/pendakwahteknologi/visitor-analytics-gpu.git
+cd visitor-analytics-gpu
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-   ```bash
-   git clone https://github.com/pendakwahteknologi/visitor-analytics.git
-   cd visitor-analytics
-   ```
+### 3. Configure Environment
 
-2. **Create virtual environment**
+```bash
+cp .env.example .env
+nano .env
+```
 
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
+Key settings:
 
-3. **Install dependencies**
+```env
+CAMERA_RTSP_URL=rtsp://user:pass@10.0.0.1:554/Streaming/Channels/101
+YOLO_MODEL=yolo26x.pt
+CONFIDENCE_THRESHOLD=0.4
+STREAM_FPS=25
+JPEG_QUALITY=90
+TZ=Asia/Kuala_Lumpur
+```
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 4. SSL Certificate (for HTTPS)
 
-4. **Configure environment**
+```bash
+# Install mkcert
+wget -q https://dl.filippo.io/mkcert/latest?for=linux/amd64 -O mkcert
+sudo install mkcert /usr/local/bin/mkcert
 
-   ```bash
-   cp .env.example .env
-   ```
+# Generate certificate
+mkdir certs
+mkcert -cert-file certs/cert.pem -key-file certs/key.pem visitor-analysis.local localhost 127.0.0.1
+```
 
-   Edit `.env` with your camera credentials and security settings (see [Configuration](#configuration)).
+### 5. mDNS (hostname resolution)
 
-5. **Start the server**
+```bash
+sudo apt install avahi-daemon
+sudo systemctl enable --now avahi-daemon
+```
 
-   ```bash
-   ./run.sh
-   ```
+### 6. Run
 
-   Or manually:
+```bash
+# HTTPS on port 443
+uvicorn backend/main:app --host 0.0.0.0 --port 443 \
+  --ssl-certfile certs/cert.pem --ssl-keyfile certs/key.pem
+```
 
-   ```bash
-   cd backend
-   uvicorn main:app --host 127.0.0.1 --port 8000
-   ```
+Or use the systemd service (see [Production Deployment](#production-deployment)).
 
-6. **Open the dashboard**
+### 7. Trust the CA Certificate on Client Machines
 
-   Navigate to `http://localhost:8000` (direct) or `http://<server-ip>/` (via Nginx). If `ADMIN_PASSWORD` is set, you'll see the login page.
+Download from: `https://visitor-analysis.local/rootCA.pem`
+
+**macOS:** Double-click → Keychain Access → set **Always Trust**
+
+**Windows:** Double-click → Install Certificate → Local Machine → Trusted Root Certification Authorities
+
+---
+
+## Accessing the Dashboard
+
+| URL | Description |
+|---|---|
+| `https://visitor-analysis.local` | Main dashboard |
+| `https://visitor-analysis.local/detect-all` | YOLO26 all-classes explorer |
+| `https://visitor-analysis.local/rootCA.pem` | Download CA certificate |
+| `http://visitor-analysis.local` | Auto-redirects to HTTPS |
+
+Works on any DHCP network — `visitor-analysis.local` resolves via mDNS regardless of IP.
 
 ---
 
 ## Configuration
 
-All configuration is done via environment variables in the `.env` file:
-
 ### Camera
 
 | Variable | Description | Default |
-|----------|-------------|---------|
-| `CAMERA_IP` | CCTV camera IP address | *required* |
-| `CAMERA_USERNAME` | Camera login username | *required* |
-| `CAMERA_PASSWORD` | Camera login password | *required* |
+|---|---|---|
+| `CAMERA_IP` | Camera IP address | *required* |
+| `CAMERA_USERNAME` | Camera username | *required* |
+| `CAMERA_PASSWORD` | Camera password | *required* |
 | `CAMERA_RTSP_URL` | Full RTSP URL (overrides above) | — |
 
 ### Detection
 
 | Variable | Description | Default |
-|----------|-------------|---------|
-| `CONFIDENCE_THRESHOLD` | Person detection confidence (0.1–0.95) | `0.5` |
+|---|---|---|
+| `CONFIDENCE_THRESHOLD` | Person detection confidence (0.1–0.95) | `0.4` |
 | `GENDER_ENABLED` | Enable gender/age detection | `true` |
-| `GENDER_THRESHOLD` | Gender detection confidence | `0.6` |
-| `YOLO_MODEL` | YOLO model file | `yolov8n.pt` |
+| `YOLO_MODEL` | YOLO model file | `yolo26x.pt` |
 
 ### Streaming
 
 | Variable | Description | Default |
-|----------|-------------|---------|
-| `STREAM_FPS` | Streaming frame rate | `10` |
-| `JPEG_QUALITY` | JPEG compression quality (0–100) | `65` |
+|---|---|---|
+| `STREAM_FPS` | Streaming frame rate | `25` |
+| `JPEG_QUALITY` | JPEG quality (0–100) | `90` |
 
 ### Server
 
 | Variable | Description | Default |
-|----------|-------------|---------|
-| `HOST` | Server bind address | `0.0.0.0` |
-| `PORT` | Server port | `8000` |
-| `DEBUG` | Enable debug logging | `False` |
-| `TZ` | Timezone | `UTC` |
+|---|---|---|
+| `HOST` | Bind address | `0.0.0.0` |
+| `PORT` | Server port | `443` |
+| `TZ` | Timezone | `Asia/Kuala_Lumpur` |
 
 ### Authentication
 
 | Variable | Description | Default |
-|----------|-------------|---------|
-| `ADMIN_USERNAME` | Dashboard login username | `admin` |
-| `ADMIN_PASSWORD` | Dashboard login password (empty = no login required) | — |
-| `SESSION_SECRET` | HMAC signing key for session cookies (auto-generated if empty) | — |
-| `SESSION_MAX_AGE` | Session expiry in seconds | `86400` (24h) |
-| `API_KEY` | API key for programmatic access (empty = no key required) | — |
-
-### Security
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `CORS_ORIGINS` | Comma-separated allowed origins | — |
-| `EMBEDDING_ENCRYPTION_KEY` | Fernet key for face embedding encryption | — |
-
-### Logging
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `LOG_FILE` | Log file path | `logs/visitor-stat.log` |
-| `LOG_MAX_BYTES` | Max log file size | `10485760` (10 MB) |
-| `LOG_BACKUP_COUNT` | Number of rotated log files | `5` |
-
----
-
-## Authentication
-
-The system supports two authentication modes that can be used independently or together:
-
-### Browser Login (Session-based)
-
-Set `ADMIN_PASSWORD` in `.env` to enable. Users visit `/login`, enter credentials, and receive an HttpOnly session cookie valid for 24 hours (configurable via `SESSION_MAX_AGE`).
-
-```bash
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=your-secure-password
-SESSION_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-```
-
-### API Key (Header-based)
-
-Set `API_KEY` in `.env` for programmatic access. Pass the key via `X-API-Key` header or `?api_key=` query parameter.
-
-```bash
-API_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
-```
-
-### Open Access
-
-Leave both `ADMIN_PASSWORD` and `API_KEY` empty for unauthenticated access (development/trusted networks only).
+|---|---|---|
+| `ADMIN_USERNAME` | Dashboard username | `admin` |
+| `ADMIN_PASSWORD` | Dashboard password (empty = no auth) | — |
+| `SESSION_SECRET` | HMAC signing key (auto-generated if empty) | — |
+| `SESSION_MAX_AGE` | Session expiry in seconds | `86400` |
+| `API_KEY` | API key for programmatic access | — |
 
 ---
 
 ## API Endpoints
 
 | Endpoint | Method | Auth | Description |
-|----------|--------|------|-------------|
-| `/` | GET | Session | Dashboard UI (redirects to `/login` if not authenticated) |
-| `/login` | GET | — | Login page |
-| `/login` | POST | — | Authenticate (form: username, password) |
-| `/logout` | GET | — | Clear session and redirect to login |
-| `/health` | GET | — | Health check with model status |
-| `/settings` | GET/POST | Yes | Get or update detection settings |
-| `/stats` | GET | Yes | Current visitor statistics |
-| `/stats/weekly` | GET | Yes | Weekly aggregated statistics |
-| `/stats/monthly` | GET | Yes | Monthly aggregated statistics |
-| `/stats/all-time` | GET | Yes | All-time aggregated statistics |
-| `/stats/export` | GET | Yes | Download CSV of all historical data |
-| `/stats/export/pdf` | GET | Yes | Download comprehensive PDF report |
-| `/reset-stats` | POST | Yes | Reset today's statistics |
-| `/stream/start` | POST | Yes | Start CCTV monitoring |
-| `/stream/stop` | POST | Yes | Stop CCTV monitoring |
+|---|---|---|---|
+| `/` | GET | Session | Dashboard UI |
+| `/detect-all` | GET | — | YOLO26 all-classes explorer |
+| `/login` | GET/POST | — | Login page / authenticate |
+| `/logout` | GET | — | Clear session |
+| `/health` | GET | — | Health check |
+| `/settings` | GET/POST | Yes | Detection settings |
+| `/stats` | GET | Yes | Current statistics |
+| `/stats/weekly` | GET | Yes | Weekly statistics |
+| `/stats/monthly` | GET | Yes | Monthly statistics |
+| `/stats/all-time` | GET | Yes | All-time statistics |
+| `/stats/export` | GET | Yes | CSV export |
+| `/stats/export/pdf` | GET | Yes | PDF report |
+| `/reset-stats` | POST | Yes | Reset today's stats |
 | `/ws/stream` | WebSocket | Yes | Live video feed |
+| `/ws/detect-all` | WebSocket | — | YOLO26 all-classes stream |
+| `/rootCA.pem` | GET | — | Download CA certificate |
+| `/proxy.pac` | GET | — | Proxy auto-config (PAC) |
 
 ---
 
-## How It Works
+## Security
 
-### Visitor Counting Pipeline
-
-1. **Person Detection** — YOLOv8n identifies people in each frame (confidence >= 0.5)
-2. **Face Analysis** — InsightFace + DeepFace ensemble extracts gender, age, and 512D face embeddings
-3. **Minimum Face Validation** — Faces smaller than 40x40 pixels are rejected
-4. **Confirmation** — New faces must be detected 3 times within 30 seconds before counting
-5. **Re-identification** — Multi-biometric fusion score prevents double-counting returning visitors
-6. **Median Age** — Age is stabilized via median across all sightings of a visitor
-7. **Statistics** — Unique counts stored in SQLite (WAL mode), auto-saved every 30 seconds
-
-### Security Layers
-
-| Layer | Protection |
-|-------|-----------|
-| Authentication | Session cookies + API key |
-| Rate Limiting | Token bucket (10 req/s, burst 30) per IP |
+| Layer | Implementation |
+|---|---|
+| HTTPS | mkcert locally-trusted certificate |
+| Authentication | HMAC-SHA256 session cookies + API key |
+| Timing Attacks | `hmac.compare_digest()` for all credential comparisons |
+| Rate Limiting | Thread-safe token bucket (10 req/s, burst 30) per IP |
+| Thread Safety | Locks on visitor ID generation and rate limiter |
+| Async Safety | `return_exceptions=True` on all `asyncio.gather()` calls |
 | CSP Headers | Content-Security-Policy, X-Frame-Options, X-Content-Type-Options |
-| XSS Prevention | All dynamic content uses `textContent`, never `innerHTML` |
+| Private Network | `Access-Control-Allow-Private-Network: true` header |
 | CORS | Configurable allowed origins |
-| Log Sanitization | RTSP credentials masked in all log output |
 | Audit Trail | Every request logged with IP, method, path, status, duration |
-| Encryption | Optional Fernet encryption for face embeddings at rest |
 
-### Performance
+---
+
+## Performance (NVIDIA RTX A2000)
 
 | Metric | Value |
-|--------|-------|
-| Detection FPS | 8–10 |
-| Latency | < 500ms |
-| Bandwidth | 2–3 Mbps |
-| CPU Usage | 40–60% |
-| Memory | ~2 GB |
-| Max Active Visitors | 500 (oldest evicted) |
-
----
-
-## Testing
-
-Run the full test suite:
-
-```bash
-source venv/bin/activate
-python -m pytest tests/ -v
-```
-
-**84 tests** across 10 test files:
-
-| Test File | Tests | Coverage |
-|-----------|-------|----------|
-| `test_detection_utils.py` | 9 | Age groups, Detection dataclass, MIN_FACE_SIZE |
-| `test_visitor_tracker.py` | 12 | Confirmation (1/2/3 detections), re-id, median age, eviction, reset |
-| `test_data_storage.py` | 11 | SQLite save/retrieve, overwrite, aggregation, CSV export, JSON migration, daily range |
-| `test_atomic_write.py` | 6 | Round-trip, corruption recovery, nested data, parent dir creation |
-| `test_api.py` | 24 | Health, auth enforcement, settings validation, login flow, security headers, PDF export |
-| `test_pdf_report.py` | 3 | PDF generation, empty data, large monthly |
-| `test_cctv_handler.py` | 4 | URL sanitization, exponential backoff |
-| `test_visitor_state.py` | 4 | Persistence round-trip, Fernet encryption |
-| `test_websocket_load.py` | 5 | 10 concurrent clients, rapid connect/disconnect, staggered connections |
+|---|---|
+| Stream FPS | 25 |
+| Detection rate | ~12 detections/sec (YOLO26x + imgsz=1280) |
+| GPU VRAM | ~1.4 GB |
+| GPU Utilisation | 20–60% |
+| Face analysis | Parallel async (all faces per frame simultaneously) |
+| Latency | < 200ms |
 
 ---
 
 ## Production Deployment
 
-### Infrastructure
-
-The production server runs on Ubuntu 22.04 with the following stack:
-
-```
-Internet → UFW Firewall (22, 80, 443) → Nginx (port 80) → Uvicorn (localhost:8000)
-```
-
-| Component | Configuration |
-|-----------|--------------|
-| **Nginx** | Reverse proxy on port 80, gzip compression, WebSocket upgrade, static asset caching (7d) |
-| **Uvicorn** | Bound to `127.0.0.1:8000` (not externally accessible) |
-| **Systemd** | `visitor-stat.service` with WatchdogSec=120, auto-restart, LimitNOFILE=65535 |
-| **UFW** | Only ports 22 (SSH), 80 (HTTP), 443 (HTTPS) open |
-| **Logrotate** | Daily rotation, 14 days retention, 50MB max per file |
-| **Cron** | Midnight daily restart via `restart-services.sh` |
-
-### Service Management
+### systemd Services
 
 ```bash
-# Check status
-sudo systemctl status visitor-stat
+# Main app
+sudo systemctl status visitor-analytics
 
-# Restart
-sudo systemctl restart visitor-stat
+# HTTP → HTTPS redirect
+sudo systemctl status http-redirect
 
-# View logs
-journalctl -u visitor-stat -f
+# mDNS
+sudo systemctl status avahi-daemon
 
-# Application logs
-tail -f logs/visitor-stat.log
-
-# Nginx logs
-tail -f /var/log/nginx/access.log
+# Restart all
+sudo systemctl restart visitor-analytics http-redirect
 ```
+
+### Firewall (UFW)
+
+```bash
+sudo ufw allow 22/tcp   # SSH
+sudo ufw allow 80/tcp   # HTTP (redirects to HTTPS)
+sudo ufw allow 443/tcp  # HTTPS
+sudo ufw enable
+```
+
+### Logs
+
+```bash
+# Live application logs
+journalctl -u visitor-analytics -f
+
+# Application log file
+tail -f logs/visitor-stat.log
+```
+
+---
+
+## Troubleshooting
+
+| Issue | Solution |
+|---|---|
+| Chrome/Edge can't connect (macOS) | System Settings → Privacy & Security → Local Network → enable browser |
+| Certificate not trusted | Download `https://visitor-analysis.local/rootCA.pem` and install as trusted CA |
+| `visitor-analysis.local` not resolving | Ensure Avahi is running: `sudo systemctl start avahi-daemon` |
+| Low FPS | Increase `detection_interval` in `streaming.py` or use a smaller model (`yolo26l.pt`) |
+| Camera not connecting | Check RTSP URL and ensure camera is on the same network |
+| GPU not used | Verify `nvidia-smi` shows the process; ensure `onnxruntime-gpu` is installed |
+| All gender "Unknown" | Ensure people face camera with adequate lighting |
+| Stats lost after restart | Set `SESSION_SECRET` in `.env` |
 
 ---
 
 ## Privacy & Compliance
 
-- No video recording — all analysis is done in real-time
-- No face images stored — only numerical embeddings for re-identification during the session
+- No video recording — all analysis is real-time only
+- No face images stored — only 512-dimensional numerical embeddings
 - Anonymous statistics only — no personally identifiable information
 - Embeddings cleared after 30 minutes of inactivity
 - Optional Fernet encryption for embeddings at rest
@@ -416,27 +403,14 @@ tail -f /var/log/nginx/access.log
 
 ---
 
-## Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| Video not showing | Ensure camera is reachable and RTSP URL is correct |
-| Low FPS (< 10) | Disable gender detection or check server CPU usage |
-| All gender "Unknown" | Ensure people face the camera with good lighting |
-| Connection drops | System auto-reconnects with exponential backoff (5s–60s) |
-| Can't access dashboard | Check `ADMIN_PASSWORD` is set and credentials are correct |
-| 401 on API calls | Provide `X-API-Key` header or authenticate via `/login` |
-| Stats lost after restart | Set `SESSION_SECRET` in `.env` for persistent sessions |
-
----
-
 ## License
 
-This project is developed by **Bahagian Transformasi Digital**.
+Developed by **Bahagian Transformasi Digital**.
 
 Built with:
-- [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics)
+- [Ultralytics YOLO26](https://docs.ultralytics.com/models/yolo26/)
 - [InsightFace](https://github.com/deepinsight/insightface)
 - [DeepFace](https://github.com/serengil/deepface)
 - [FastAPI](https://fastapi.tiangolo.com/)
 - [OpenCV](https://opencv.org/)
+- [mkcert](https://github.com/FiloSottile/mkcert)

@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import threading
 from ultralytics import YOLO
 from typing import List, Dict, Tuple, Optional
 import logging
@@ -84,7 +85,7 @@ class PersonDetector:
 
         try:
             # Use smaller image size for faster inference
-            results = self.model(frame, conf=self.confidence, classes=[0], verbose=False, imgsz=640)
+            results = self.model(frame, conf=self.confidence, classes=[0], verbose=False, imgsz=1280, half=True, device=0, iou=0.45)
 
             for result in results:
                 boxes = result.boxes
@@ -160,7 +161,7 @@ class InsightFaceAnalyzer:
                 name=self.model_name,
                 providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
             )
-            self.app.prepare(ctx_id=0, det_size=(640, 640))
+            self.app.prepare(ctx_id=0, det_size=(1024, 1024))
             self.model_loaded = True
             logger.info(f"InsightFace analyzer initialized ({self.model_name} model)")
         except (RuntimeError, OSError, ValueError) as e:
@@ -171,7 +172,7 @@ class InsightFaceAnalyzer:
                     name=self.model_name,
                     providers=['CPUExecutionProvider']
                 )
-                self.app.prepare(ctx_id=-1, det_size=(640, 640))
+                self.app.prepare(ctx_id=-1, det_size=(1024, 1024))
                 self.model_loaded = True
                 logger.info(f"InsightFace analyzer initialized ({self.model_name} - CPU mode)")
             except (ImportError, RuntimeError, OSError, ValueError) as e2:
@@ -423,6 +424,7 @@ class VisitorTracker:
         self.state_persistence = VisitorStatePersistence()
         self.last_save_time = time.time()
         self.save_interval = 30.0  # Save every 30 seconds
+        self._id_lock = threading.Lock()
 
         # Try to restore state from disk
         self._restore_state()
@@ -647,8 +649,9 @@ class VisitorTracker:
             # Check if confirmed enough times
             if pending_data["count"] >= self.confirmation_count:
                 # Promote to confirmed visitor
-                visitor_id = self.next_visitor_id
-                self.next_visitor_id += 1
+                with self._id_lock:
+                    visitor_id = self.next_visitor_id
+                    self.next_visitor_id += 1
 
                 # Resolve demographics via median age
                 final_age_group = pending_data["age_group"]

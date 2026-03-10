@@ -51,7 +51,7 @@ def atomic_write_json(file_path: str | Path, data: Any, indent: int = 2) -> None
         # Clean up temp file on error
         try:
             os.unlink(temp_path)
-        except:
+        except OSError:
             pass
         logger.error(f"Error during atomic write to {file_path}: {e}")
         raise
