@@ -1,0 +1,36 @@
+[Unit]
+Description=Visitor Analytics GPU
+Documentation=https://github.com/pendakwahteknologi/visitor-analytics-gpu
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/adilhidayat/visitor-analytics/backend
+ExecStart=/home/adilhidayat/visitor-analytics/venv/bin/uvicorn main:app \
+    --host 0.0.0.0 \
+    --port 443 \
+    --ssl-certfile /home/adilhidayat/visitor-analytics/certs/cert.pem \
+    --ssl-keyfile /home/adilhidayat/visitor-analytics/certs/key.pem
+EnvironmentFile=/home/adilhidayat/visitor-analytics/.env
+
+# Allow time for YOLO model + InsightFace to load on GPU (~30s)
+TimeoutStartSec=180
+TimeoutStopSec=30
+
+# Always restart on failure
+Restart=always
+RestartSec=10
+
+# Limit restart rate: max 5 starts in 5 minutes, then wait
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Log to journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=visitor-analytics
+
+[Install]
+WantedBy=multi-user.target
