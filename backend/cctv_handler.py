@@ -1,4 +1,5 @@
 import cv2
+import re
 import threading
 import time
 from typing import Optional
@@ -7,6 +8,11 @@ import logging
 from config import CAMERA_RTSP_URL, STREAM_FPS
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_url(url: str) -> str:
+    """Mask credentials in RTSP URLs for safe logging."""
+    return re.sub(r"(rtsp://)[^:]+:[^@]+(@)", r"\1****:****\2", url)
 
 
 class CCTVHandler:
@@ -56,11 +62,11 @@ class CCTVHandler:
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
             if not self.cap.isOpened():
-                logger.error(f"Failed to connect to CCTV at {self.rtsp_url}")
+                logger.error(f"Failed to connect to CCTV at {_sanitize_url(self.rtsp_url)}")
                 self._notify_state_change("disconnected", "Failed to connect to camera")
                 return False
 
-            logger.info(f"Connected to CCTV at {self.rtsp_url}")
+            logger.info(f"Connected to CCTV at {_sanitize_url(self.rtsp_url)}")
             self._notify_state_change("connected", "Camera connected")
             return True
         except Exception as e:

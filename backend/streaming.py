@@ -46,15 +46,10 @@ class ConnectionManager:
             self.active_connections.discard(conn)
 
     async def broadcast_status(self, status_data: Dict[str, Any]):
-        """Broadcast connection status to all connected clients.
-
-        Args:
-            status_data: Dictionary containing status information
-        """
+        """Broadcast connection status to all connected clients."""
         if not self.active_connections:
             return
 
-        # Format as JSON status message
         message = json.dumps({
             "type": "status",
             "data": status_data
@@ -68,7 +63,6 @@ class ConnectionManager:
                 logger.warning(f"Failed to send status: {e}")
                 disconnected.add(connection)
 
-        # Clean up disconnected clients
         for conn in disconnected:
             self.active_connections.discard(conn)
 
@@ -80,7 +74,6 @@ class ConnectionManager:
 
 def encode_frame_to_base64(frame, quality: int = JPEG_QUALITY, max_width: int = 1280) -> str:
     """Encode a frame to base64 JPEG string with JSON envelope."""
-    # Resize frame if too large
     height, width = frame.shape[:2]
     if width > max_width:
         scale = max_width / width
@@ -92,7 +85,6 @@ def encode_frame_to_base64(frame, quality: int = JPEG_QUALITY, max_width: int = 
     _, buffer = cv2.imencode('.jpg', frame, encode_param)
     base64_frame = base64.b64encode(buffer).decode('utf-8')
 
-    # Return JSON envelope
     return json.dumps({
         "type": "frame",
         "data": base64_frame
@@ -127,7 +119,6 @@ class StreamManager:
                 "Unknown": 0
             }
         }
-        # Note: session_stats now comes from visitor_tracker (unique visitors only)
 
     async def start_streaming(self):
         """Start the streaming loop."""
@@ -143,12 +134,7 @@ class StreamManager:
         logger.info("Streaming started")
 
     def _on_cctv_state_change(self, state: str, message: str):
-        """Callback for CCTV connection state changes.
-
-        This is called from the CCTV handler thread, so we need to schedule
-        the async broadcast on the event loop.
-        """
-        # Get the event loop and schedule the broadcast
+        """Callback for CCTV connection state changes."""
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
@@ -182,7 +168,7 @@ class StreamManager:
         fps_timer = time.time()
         frame_counter = 0
         detection_interval = 2  # Run person detection every N frames
-        analysis_interval = 5  # Run face analysis less frequently (every 5 frames)
+        analysis_interval = 5  # Run face analysis less frequently
         last_detections = []
         last_stats = {
             "total_people": 0, "male": 0, "female": 0, "unknown": 0,
@@ -211,18 +197,20 @@ class StreamManager:
                     resized_frame = frame
 
                 # Run detection with optimized intervals
-                if frame_counter % detection_interval == 0:
-                    # Run person detection every N frames
+                is_detection_frame = frame_counter % detection_interval == 0
+                is_analysis_frame = frame_counter % analysis_interval == 0
+
+                if is_detection_frame:
+                    # Run person detection
                     detections = self.detection_engine.person_detector.detect(resized_frame)
                     last_detections = detections
 
                     # Initialize age group stats for current frame
                     age_groups = {"Children": 0, "Teens": 0, "Young Adults": 0, "Adults": 0, "Seniors": 0, "Unknown": 0}
 
-                    # Run face analysis (gender/age/embedding) less frequently
-                    if self.detection_engine.enable_gender and frame_counter % analysis_interval == 0:
+                    # Only run face analysis on fresh detection frames
+                    if self.detection_engine.enable_gender and is_analysis_frame:
                         for det in detections:
-                            # Use InsightFace analyzer for gender, age, AND embedding
                             analysis = self.detection_engine.face_analyzer.analyze(resized_frame, det.bbox)
                             det.gender = analysis["gender"]
                             det.gender_confidence = analysis["gender_confidence"]
@@ -235,7 +223,8 @@ class StreamManager:
                                 is_new, visitor_id = self.detection_engine.visitor_tracker.check_visitor(
                                     analysis["embedding"],
                                     analysis["gender"],
-                                    analysis["age_group"]
+                                    analysis["age_group"],
+                                    age=analysis["age"],
                                 )
                                 det.is_new_visitor = is_new
                                 det.visitor_id = visitor_id
@@ -256,7 +245,7 @@ class StreamManager:
                     }
                     last_stats = stats
 
-                    # Update current stats (for live display - current frame)
+                    # Update current stats (for live display)
                     self.current_stats["total_people"] = stats["total_people"]
                     self.current_stats["male"] = stats["male"]
                     self.current_stats["female"] = stats["female"]
@@ -275,7 +264,6 @@ class StreamManager:
 
                 # Only broadcast frames if CCTV is connected
                 if self.cctv_handler.connection_state == "connected":
-                    # Encode and broadcast with quality optimization
                     frame_data = encode_frame_to_base64(annotated_frame, quality=70, max_width=1280)
                     await self.connection_manager.broadcast_frame(frame_data)
 
@@ -287,7 +275,7 @@ class StreamManager:
                 fps_counter = 0
                 fps_timer = time.time()
 
-            # Save data periodically (using visitor tracker stats - unique visitors only)
+            # Save data periodically
             if self.data_storage and time.time() - last_save_time >= save_interval:
                 try:
                     visitor_stats = self.detection_engine.get_visitor_stats()

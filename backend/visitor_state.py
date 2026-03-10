@@ -1,9 +1,13 @@
-"""Visitor state persistence to survive system reboots and power loss."""
+"""Visitor state persistence to survive system reboots and power loss.
+
+Supports optional at-rest encryption for face embeddings via EMBEDDING_ENCRYPTION_KEY.
+"""
 
 import numpy as np
 import logging
+import base64
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 try:
     from .atomic_write import atomic_write_json, atomic_read_json
@@ -11,6 +15,56 @@ except ImportError:
     from atomic_write import atomic_write_json, atomic_read_json
 
 logger = logging.getLogger(__name__)
+
+# Lazy-loaded encryption
+_fernet: Optional[object] = None
+_encryption_available = False
+
+
+def _get_fernet():
+    """Lazily initialize Fernet cipher from env key."""
+    global _fernet, _encryption_available
+    if _fernet is not None:
+        return _fernet
+
+    try:
+        from config import EMBEDDING_ENCRYPTION_KEY
+        if EMBEDDING_ENCRYPTION_KEY:
+            from cryptography.fernet import Fernet
+            _fernet = Fernet(EMBEDDING_ENCRYPTION_KEY.encode() if isinstance(EMBEDDING_ENCRYPTION_KEY, str) else EMBEDDING_ENCRYPTION_KEY)
+            _encryption_available = True
+            logger.info("Embedding encryption enabled")
+        else:
+            _encryption_available = False
+    except Exception as e:
+        logger.warning(f"Embedding encryption not available: {e}")
+        _encryption_available = False
+
+    return _fernet
+
+
+def _encrypt_embedding(emb_list: list) -> dict:
+    """Encrypt an embedding list. Returns tagged dict for deserialization."""
+    fernet = _get_fernet()
+    if fernet and _encryption_available:
+        raw = base64.b64encode(np.array(emb_list, dtype=np.float32).tobytes()).decode()
+        encrypted = fernet.encrypt(raw.encode()).decode()
+        return {"__encrypted__": True, "data": encrypted}
+    return emb_list  # Store as plain list
+
+
+def _decrypt_embedding(value) -> list:
+    """Decrypt an embedding if encrypted, otherwise return as-is."""
+    if isinstance(value, dict) and value.get("__encrypted__"):
+        fernet = _get_fernet()
+        if fernet:
+            raw = fernet.decrypt(value["data"].encode()).decode()
+            arr = np.frombuffer(base64.b64decode(raw), dtype=np.float32)
+            return arr.tolist()
+        else:
+            logger.warning("Encrypted embedding found but no decryption key available")
+            return []
+    return value
 
 
 class VisitorStatePersistence:
@@ -29,18 +83,8 @@ class VisitorStatePersistence:
         next_visitor_id: int,
         next_pending_id: int
     ) -> None:
-        """
-        Save visitor tracking state to disk.
-
-        Args:
-            visitors: Confirmed visitors dict with embeddings
-            pending_visitors: Pending visitors dict
-            stats: Current visitor statistics
-            next_visitor_id: Next ID to assign
-            next_pending_id: Next pending ID to assign
-        """
+        """Save visitor tracking state to disk."""
         try:
-            # Serialize state, converting numpy arrays to lists
             state = {
                 "visitors": self._serialize_visitors(visitors),
                 "pending_visitors": self._serialize_visitors(pending_visitors),
@@ -60,17 +104,7 @@ class VisitorStatePersistence:
             logger.error(f"Error saving visitor state: {e}")
 
     def load_state(self) -> Dict[str, Any]:
-        """
-        Load visitor tracking state from disk.
-
-        Returns:
-            Dictionary containing:
-            - visitors: Confirmed visitors (with numpy embeddings restored)
-            - pending_visitors: Pending visitors
-            - stats: Visitor statistics
-            - next_visitor_id: Next ID to assign
-            - next_pending_id: Next pending ID to assign
-        """
+        """Load visitor tracking state from disk."""
         default_state = {
             "visitors": {},
             "pending_visitors": {},
@@ -78,14 +112,14 @@ class VisitorStatePersistence:
                 "total_visitors": 0,
                 "male": 0,
                 "female": 0,
-                "unknown": 0,  # Track unknown gender (deduplicated via face embedding)
+                "unknown": 0,
                 "age_groups": {
                     "Children": 0,
                     "Teens": 0,
                     "Young Adults": 0,
                     "Adults": 0,
                     "Seniors": 0,
-                    "Unknown": 0  # Track unknown age groups
+                    "Unknown": 0
                 }
             },
             "next_visitor_id": 1,
@@ -95,7 +129,6 @@ class VisitorStatePersistence:
         try:
             state = atomic_read_json(self.state_file, default=default_state)
 
-            # Deserialize visitors, converting lists back to numpy arrays
             if "visitors" in state:
                 state["visitors"] = self._deserialize_visitors(state["visitors"])
 
@@ -107,7 +140,7 @@ class VisitorStatePersistence:
                 if key not in state:
                     state[key] = value
 
-            # Ensure stats has all required fields (for backward compatibility)
+            # Backward compatibility
             if "stats" in state:
                 if "unknown" not in state["stats"]:
                     state["stats"]["unknown"] = 0
@@ -128,20 +161,16 @@ class VisitorStatePersistence:
             return default_state
 
     def _serialize_visitors(self, visitors: Dict) -> Dict:
-        """
-        Convert visitor dict with numpy arrays to JSON-serializable format.
-
-        Converts numpy arrays to lists for JSON serialization.
-        """
+        """Convert visitor dict with numpy arrays to JSON-serializable format."""
         serialized = {}
 
         for visitor_id, visitor_data in visitors.items():
             serialized_data = visitor_data.copy()
 
-            # Convert numpy embeddings to lists
+            # Convert numpy embeddings to lists (optionally encrypted)
             if "embeddings" in serialized_data:
                 serialized_data["embeddings"] = [
-                    emb.tolist() if isinstance(emb, np.ndarray) else emb
+                    _encrypt_embedding(emb.tolist() if isinstance(emb, np.ndarray) else emb)
                     for emb in serialized_data["embeddings"]
                 ]
 
@@ -150,20 +179,16 @@ class VisitorStatePersistence:
         return serialized
 
     def _deserialize_visitors(self, visitors: Dict) -> Dict:
-        """
-        Convert visitor dict from JSON format back to numpy arrays.
-
-        Converts embedding lists back to numpy arrays.
-        """
+        """Convert visitor dict from JSON format back to numpy arrays."""
         deserialized = {}
 
         for visitor_id, visitor_data in visitors.items():
             deserialized_data = visitor_data.copy()
 
-            # Convert embedding lists back to numpy arrays
+            # Convert embedding lists/encrypted blobs back to numpy arrays
             if "embeddings" in deserialized_data:
                 deserialized_data["embeddings"] = [
-                    np.array(emb) if isinstance(emb, list) else emb
+                    np.array(_decrypt_embedding(emb)) if not isinstance(emb, np.ndarray) else emb
                     for emb in deserialized_data["embeddings"]
                 ]
 

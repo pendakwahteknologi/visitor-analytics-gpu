@@ -2,6 +2,114 @@
 
 All notable changes to the CCTV Detection System will be documented in this file.
 
+## [4.0.0] - 2026-03-10
+
+### Security, Stability & Accuracy Overhaul
+
+**Comprehensive system hardening with login authentication, SQLite storage, 77 automated tests, and precision tuning for near-zero false visitor counts.**
+
+#### Security
+
+1. **Session-based Login Authentication**
+   - Login page at `/login` with dark-themed UI matching dashboard
+   - HMAC-SHA256 signed session cookies (HttpOnly, SameSite=Lax)
+   - Configurable session expiry (default 24 hours)
+   - `/logout` endpoint to clear session
+   - Dashboard (`/`) redirects to login if unauthenticated
+   - WebSocket accepts session cookie automatically (no query param needed for browsers)
+   - Audit log tracks auth method per request (key/session/none)
+
+2. **Dual Authentication Modes**
+   - Browser users: session cookie via `/login`
+   - API clients: `X-API-Key` header or `?api_key=` query param
+   - Both modes work independently or together
+   - No auth required if neither `ADMIN_PASSWORD` nor `API_KEY` is set
+
+3. **Security Hardening**
+   - Removed all hardcoded default credentials from `config.py`
+   - Added CSP headers (Content-Security-Policy, X-Frame-Options, X-Content-Type-Options, Referrer-Policy)
+   - Added rate limiting middleware (token bucket: 10 req/s, burst 30 per IP)
+   - Added CORS configuration via `CORS_ORIGINS` env var
+   - RTSP credentials masked in all log output
+   - XSS protection: all dynamic DOM updates use `textContent`, never `innerHTML`
+   - Optional Fernet encryption for face embeddings at rest
+
+#### Statistics Accuracy
+
+4. **Precision Tuning**
+   - Raised `confirmation_count` from 1 to 3 — visitors must be detected 3 times before counting
+   - Raised `CONFIDENCE_THRESHOLD` from 0.3 to 0.5 — fewer false person detections
+   - Raised `similarity_threshold` from 0.3 to 0.45 — prevents merging distinct visitors
+   - Added minimum face size validation (40x40 pixels)
+   - Median age aggregation across sightings — stable demographics per visitor
+
+5. **Data Storage Migration**
+   - Migrated from JSON file to SQLite (WAL mode, indexed by date)
+   - Automatic migration of existing `daily_stats.json` on first run
+   - `save_current_stats()` uses upsert (INSERT ... ON CONFLICT DO UPDATE)
+   - Auto-cleanup of data older than 365 days (configurable)
+
+#### Stability
+
+6. **Crash Resilience**
+   - Signal handlers (SIGTERM/SIGINT) save visitor state before exit
+   - Auto-save visitor state every 30 seconds
+   - Atomic file writes (temp + fsync + rename) for corruption protection
+   - Max 500 active visitors (oldest evicted on overflow)
+
+7. **Code Quality**
+   - Replaced all broad `except Exception` in `detection.py` with specific exceptions (`ValueError`, `RuntimeError`, `cv2.error`, `ImportError`, `IndexError`, `TypeError`, `AttributeError`, `KeyError`, `OSError`)
+   - Input validation on `/settings` endpoint (confidence 0.1–0.95)
+   - Pinned all dependency versions with `~=` (compatible release)
+
+#### Infrastructure
+
+8. **Logging & Monitoring**
+   - RotatingFileHandler with configurable max size and backup count
+   - AuditLogMiddleware logs IP, method, path, status, duration, auth method
+   - `/health` endpoint reports YOLO/InsightFace load status, last detection time, active visitors, WebSocket clients
+   - Cache-Control headers for static assets (max-age=86400)
+
+9. **CSV Export**
+   - `GET /stats/export` returns all historical data as CSV download
+
+10. **77 Automated Tests**
+    - `test_detection_utils.py` (9): age groups, Detection dataclass, MIN_FACE_SIZE
+    - `test_visitor_tracker.py` (12): confirmation system, re-identification, median age, eviction, reset
+    - `test_data_storage.py` (9): SQLite CRUD, aggregation, CSV export, JSON migration
+    - `test_atomic_write.py` (6): round-trip, corruption recovery, nested data
+    - `test_api.py` (22): health, auth enforcement, login flow, settings validation, security headers
+    - `test_cctv_handler.py` (4): URL sanitization, exponential backoff
+    - `test_visitor_state.py` (4): persistence round-trip, Fernet encryption
+    - `test_websocket_load.py` (5): 10 concurrent clients, 20 rapid connect/disconnect, concurrent ping/pong, staggered connections
+
+#### Files Added
+- `frontend/login.html` — Login page
+- `tests/test_websocket_load.py` — WebSocket load tests
+
+#### Files Modified
+- `backend/main.py` — Login/logout endpoints, session auth, middleware stack, audit logging
+- `backend/config.py` — Added ADMIN_USERNAME, ADMIN_PASSWORD, SESSION_SECRET, SESSION_MAX_AGE
+- `backend/detection.py` — Specific exception handling (6 catch blocks replaced)
+- `backend/data_storage.py` — Full rewrite: JSON → SQLite
+- `backend/visitor_state.py` — Optional Fernet encryption
+- `static/js/app.js` — 401 redirect to login, session-aware WebSocket
+- `.env.example` — Added all new config options
+- `requirements.txt` — Added cryptography, python-multipart, pytest-asyncio, websockets
+- `tests/test_api.py` — Added 6 login flow tests
+
+#### New Environment Variables
+- `ADMIN_USERNAME` — Dashboard login username (default: `admin`)
+- `ADMIN_PASSWORD` — Dashboard login password (empty = no login)
+- `SESSION_SECRET` — HMAC signing key (auto-generated if empty)
+- `SESSION_MAX_AGE` — Session cookie expiry in seconds (default: `86400`)
+- `API_KEY` — API key for programmatic access
+- `CORS_ORIGINS` — Comma-separated allowed origins
+- `EMBEDDING_ENCRYPTION_KEY` — Fernet key for embedding encryption
+- `LOG_FILE`, `LOG_MAX_BYTES`, `LOG_BACKUP_COUNT` — Logging configuration
+
+---
+
 ## [3.4.3] - 2026-02-06
 
 ### System Reliability: Systemd Service & Automatic Restarts

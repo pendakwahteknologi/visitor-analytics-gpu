@@ -2,11 +2,15 @@ class CCTVApp {
     constructor() {
         this.ws = null;
         this.isStreaming = false;
-        this.cctvConnected = false;  // Track CCTV connection separately
+        this.cctvConnected = false;
         this.statsInterval = null;
         this.periodStatsInterval = null;
         this.clockInterval = null;
         this.reconnectAttempts = 0;
+
+        // API key (optional — for programmatic access; browser uses session cookie)
+        const meta = document.querySelector('meta[name="api-key"]');
+        this.apiKey = meta ? meta.getAttribute('content') : '';
 
         // DOM elements
         this.videoFeed = document.getElementById('video-feed');
@@ -80,13 +84,28 @@ class CCTVApp {
         this.init();
     }
 
+    /**
+     * Build fetch headers with API key if configured.
+     */
+    _headers(extra = {}) {
+        const h = { 'Content-Type': 'application/json', ...extra };
+        if (this.apiKey) h['X-API-Key'] = this.apiKey;
+        return h;
+    }
+
+    /**
+     * Safely set text content (prevents XSS — never use innerHTML for dynamic data).
+     */
+    _setText(el, value) {
+        if (el) el.textContent = value;
+    }
+
     init() {
         this.bindEvents();
         this.loadSettings();
         this.startStatsPolling();
         this.startPeriodStatsPolling();
         this.startClock();
-        // Auto-connect on load
         this.connectWebSocket();
     }
 
@@ -94,7 +113,7 @@ class CCTVApp {
         this.btnResetStats.addEventListener('click', () => this.resetStats());
 
         this.confidenceSlider.addEventListener('input', (e) => {
-            this.confidenceValue.textContent = parseFloat(e.target.value).toFixed(2);
+            this._setText(this.confidenceValue, parseFloat(e.target.value).toFixed(2));
         });
 
         this.confidenceSlider.addEventListener('change', (e) => {
@@ -110,33 +129,40 @@ class CCTVApp {
         const updateClock = () => {
             const now = new Date();
 
-            // Format time
             const hours = String(now.getHours()).padStart(2, '0');
             const minutes = String(now.getMinutes()).padStart(2, '0');
             const seconds = String(now.getSeconds()).padStart(2, '0');
-            this.currentTime.textContent = `${hours}:${minutes}:${seconds}`;
+            this._setText(this.currentTime, `${hours}:${minutes}:${seconds}`);
 
-            // Format date
             const options = {
                 weekday: 'long',
                 year: 'numeric',
                 month: 'long',
                 day: 'numeric'
             };
-            this.currentDate.textContent = now.toLocaleDateString('en-MY', options);
+            this._setText(this.currentDate, now.toLocaleDateString('en-MY', options));
         };
 
         updateClock();
         this.clockInterval = setInterval(updateClock, 1000);
     }
 
+    _checkAuth(response) {
+        if (response.status === 401) {
+            window.location.href = '/login';
+            return false;
+        }
+        return true;
+    }
+
     async loadSettings() {
         try {
-            const response = await fetch('/settings');
+            const response = await fetch('/settings', { headers: this._headers() });
+            if (!this._checkAuth(response)) return;
             const settings = await response.json();
 
             this.confidenceSlider.value = settings.confidence;
-            this.confidenceValue.textContent = settings.confidence.toFixed(2);
+            this._setText(this.confidenceValue, settings.confidence.toFixed(2));
             this.genderToggle.checked = settings.enable_gender;
         } catch (error) {
             console.error('Failed to load settings:', error);
@@ -147,7 +173,7 @@ class CCTVApp {
         try {
             await fetch('/settings', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this._headers(),
                 body: JSON.stringify(settings)
             });
         } catch (error) {
@@ -157,7 +183,9 @@ class CCTVApp {
 
     connectWebSocket() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws/stream`;
+        let wsUrl = `${protocol}//${window.location.host}/ws/stream`;
+        // API key only needed for programmatic access; browser sends session cookie automatically
+        if (this.apiKey) wsUrl += `?api_key=${encodeURIComponent(this.apiKey)}`;
 
         this.setStatus('connecting', 'CONNECTING...');
 
@@ -166,21 +194,17 @@ class CCTVApp {
         this.ws.onopen = () => {
             this.isStreaming = true;
             this.reconnectAttempts = 0;
-            // Don't set status to LIVE yet - wait for CCTV connection status
         };
 
         this.ws.onmessage = (event) => {
             try {
-                // Parse JSON message
                 const message = JSON.parse(event.data);
 
                 if (message.type === 'frame') {
-                    // Only update video if CCTV is connected
                     if (this.cctvConnected) {
                         this.videoFeed.src = `data:image/jpeg;base64,${message.data}`;
                     }
                 } else if (message.type === 'status') {
-                    // Handle connection status update
                     this.handleCCTVStatus(message.data);
                 }
             } catch (error) {
@@ -193,7 +217,6 @@ class CCTVApp {
             this.videoFeed.classList.remove('active');
             this.noFeed.classList.remove('hidden');
 
-            // Always auto-reconnect with exponential backoff
             this.reconnectAttempts++;
             const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
 
@@ -214,40 +237,36 @@ class CCTVApp {
         const { state, message } = status;
 
         if (state === 'connected') {
-            // CCTV is connected - show live feed
             this.cctvConnected = true;
             this.setStatus('connected', 'LIVE');
             this.videoFeed.classList.add('active');
             this.noFeed.classList.add('hidden');
         } else if (state === 'disconnected') {
-            // CCTV is disconnected - clear video and show overlay
             this.cctvConnected = false;
-            this.videoFeed.src = '';  // Clear stale frame
+            this.videoFeed.src = '';
             this.videoFeed.classList.remove('active');
             this.noFeed.classList.remove('hidden');
-            this.noFeedText.textContent = 'Camera Disconnected';
-            this.noFeedSubtext.textContent = message || 'Connection lost';
+            this._setText(this.noFeedText, 'Camera Disconnected');
+            this._setText(this.noFeedSubtext, message || 'Connection lost');
             this.setStatus('disconnected', 'DISCONNECTED');
         } else if (state === 'reconnecting') {
-            // CCTV is reconnecting
             this.cctvConnected = false;
-            this.videoFeed.src = '';  // Clear stale frame
+            this.videoFeed.src = '';
             this.videoFeed.classList.remove('active');
             this.noFeed.classList.remove('hidden');
-            this.noFeedText.textContent = 'Reconnecting...';
-            this.noFeedSubtext.textContent = message || 'Please wait';
+            this._setText(this.noFeedText, 'Reconnecting...');
+            this._setText(this.noFeedSubtext, message || 'Please wait');
             this.setStatus('disconnected', 'RECONNECTING');
         } else if (state === 'connecting') {
-            // CCTV is connecting
             this.cctvConnected = false;
-            this.noFeedText.textContent = 'Connecting to Camera...';
-            this.noFeedSubtext.textContent = 'Please wait';
+            this._setText(this.noFeedText, 'Connecting to Camera...');
+            this._setText(this.noFeedSubtext, 'Please wait');
             this.setStatus('connecting', 'CONNECTING');
         }
     }
 
     setStatus(state, text) {
-        this.statusText.textContent = text;
+        this._setText(this.statusText, text);
 
         if (state === 'connected') {
             this.liveDot.classList.add('active');
@@ -263,20 +282,18 @@ class CCTVApp {
 
     startPeriodStatsPolling() {
         this.fetchPeriodStats();
-        // Update period stats every 10 seconds
         this.periodStatsInterval = setInterval(() => this.fetchPeriodStats(), 10000);
     }
 
     async fetchStats() {
         try {
-            const response = await fetch('/stats');
+            const response = await fetch('/stats', { headers: this._headers() });
+            if (!this._checkAuth(response)) return;
             const stats = await response.json();
 
-            // Current stats
-            this.currentPeople.textContent = stats.current.total_people || 0;
-            this.fpsValue.textContent = stats.current.fps || 0;
+            this._setText(this.currentPeople, stats.current.total_people || 0);
+            this._setText(this.fpsValue, stats.current.fps || 0);
 
-            // Today's visitors from saved data
             const todaySaved = stats.today_saved || {};
             const totalToday = todaySaved.total_visitors || 0;
             const maleTotal = todaySaved.male || 0;
@@ -284,32 +301,27 @@ class CCTVApp {
             const unknownTotal = todaySaved.unknown || 0;
             const totalGenderDetected = maleTotal + femaleTotal + unknownTotal;
 
-            this.totalVisitors.textContent = totalToday;
-            this.maleCount.textContent = maleTotal;
-            this.femaleCount.textContent = femaleTotal;
-            this.unknownCount.textContent = unknownTotal;
+            this._setText(this.totalVisitors, totalToday);
+            this._setText(this.maleCount, maleTotal);
+            this._setText(this.femaleCount, femaleTotal);
+            this._setText(this.unknownCount, unknownTotal);
 
-            // Calculate percentages
             if (totalGenderDetected > 0) {
-                const malePercent = ((maleTotal / totalGenderDetected) * 100).toFixed(1);
-                const femalePercent = ((femaleTotal / totalGenderDetected) * 100).toFixed(1);
-                const unknownPercent = ((unknownTotal / totalGenderDetected) * 100).toFixed(1);
-                this.malePercent.textContent = `${malePercent}%`;
-                this.femalePercent.textContent = `${femalePercent}%`;
-                this.unknownPercent.textContent = `${unknownPercent}%`;
+                this._setText(this.malePercent, `${((maleTotal / totalGenderDetected) * 100).toFixed(1)}%`);
+                this._setText(this.femalePercent, `${((femaleTotal / totalGenderDetected) * 100).toFixed(1)}%`);
+                this._setText(this.unknownPercent, `${((unknownTotal / totalGenderDetected) * 100).toFixed(1)}%`);
             } else {
-                this.malePercent.textContent = '0%';
-                this.femalePercent.textContent = '0%';
-                this.unknownPercent.textContent = '0%';
+                this._setText(this.malePercent, '0%');
+                this._setText(this.femalePercent, '0%');
+                this._setText(this.unknownPercent, '0%');
             }
 
-            // Update age group stats from saved data
             const ageGroups = todaySaved.age_groups || {};
-            this.ageChildren.textContent = ageGroups['Children'] || 0;
-            this.ageTeens.textContent = ageGroups['Teens'] || 0;
-            this.ageYoungAdults.textContent = ageGroups['Young Adults'] || 0;
-            this.ageAdults.textContent = ageGroups['Adults'] || 0;
-            this.ageSeniors.textContent = ageGroups['Seniors'] || 0;
+            this._setText(this.ageChildren, ageGroups['Children'] || 0);
+            this._setText(this.ageTeens, ageGroups['Teens'] || 0);
+            this._setText(this.ageYoungAdults, ageGroups['Young Adults'] || 0);
+            this._setText(this.ageAdults, ageGroups['Adults'] || 0);
+            this._setText(this.ageSeniors, ageGroups['Seniors'] || 0);
         } catch (error) {
             // Silent fail for stats polling
         }
@@ -317,58 +329,57 @@ class CCTVApp {
 
     async fetchPeriodStats() {
         try {
-            // Fetch all period stats
+            const hdrs = this._headers();
             const [weeklyRes, monthlyRes, alltimeRes] = await Promise.all([
-                fetch('/stats/weekly'),
-                fetch('/stats/monthly'),
-                fetch('/stats/all-time')
+                fetch('/stats/weekly', { headers: hdrs }),
+                fetch('/stats/monthly', { headers: hdrs }),
+                fetch('/stats/all-time', { headers: hdrs })
             ]);
+
+            if (!this._checkAuth(weeklyRes) || !this._checkAuth(monthlyRes) || !this._checkAuth(alltimeRes)) return;
 
             const weekly = await weeklyRes.json();
             const monthly = await monthlyRes.json();
             const alltime = await alltimeRes.json();
 
-            // Update weekly stats
-            this.weekTotal.textContent = weekly.total_visitors || 0;
-            this.weekMale.textContent = weekly.male || 0;
-            this.weekFemale.textContent = weekly.female || 0;
-            this.weekUnknown.textContent = weekly.unknown || 0;
+            // Weekly
+            this._setText(this.weekTotal, weekly.total_visitors || 0);
+            this._setText(this.weekMale, weekly.male || 0);
+            this._setText(this.weekFemale, weekly.female || 0);
+            this._setText(this.weekUnknown, weekly.unknown || 0);
 
-            // Weekly age groups
             const weekAge = weekly.age_groups || {};
-            this.weekAgeChildren.textContent = weekAge['Children'] || 0;
-            this.weekAgeTeens.textContent = weekAge['Teens'] || 0;
-            this.weekAgeYoung.textContent = weekAge['Young Adults'] || 0;
-            this.weekAgeAdults.textContent = weekAge['Adults'] || 0;
-            this.weekAgeSeniors.textContent = weekAge['Seniors'] || 0;
+            this._setText(this.weekAgeChildren, weekAge['Children'] || 0);
+            this._setText(this.weekAgeTeens, weekAge['Teens'] || 0);
+            this._setText(this.weekAgeYoung, weekAge['Young Adults'] || 0);
+            this._setText(this.weekAgeAdults, weekAge['Adults'] || 0);
+            this._setText(this.weekAgeSeniors, weekAge['Seniors'] || 0);
 
-            // Update monthly stats
-            this.monthTotal.textContent = monthly.total_visitors || 0;
-            this.monthMale.textContent = monthly.male || 0;
-            this.monthFemale.textContent = monthly.female || 0;
-            this.monthUnknown.textContent = monthly.unknown || 0;
+            // Monthly
+            this._setText(this.monthTotal, monthly.total_visitors || 0);
+            this._setText(this.monthMale, monthly.male || 0);
+            this._setText(this.monthFemale, monthly.female || 0);
+            this._setText(this.monthUnknown, monthly.unknown || 0);
 
-            // Monthly age groups
             const monthAge = monthly.age_groups || {};
-            this.monthAgeChildren.textContent = monthAge['Children'] || 0;
-            this.monthAgeTeens.textContent = monthAge['Teens'] || 0;
-            this.monthAgeYoung.textContent = monthAge['Young Adults'] || 0;
-            this.monthAgeAdults.textContent = monthAge['Adults'] || 0;
-            this.monthAgeSeniors.textContent = monthAge['Seniors'] || 0;
+            this._setText(this.monthAgeChildren, monthAge['Children'] || 0);
+            this._setText(this.monthAgeTeens, monthAge['Teens'] || 0);
+            this._setText(this.monthAgeYoung, monthAge['Young Adults'] || 0);
+            this._setText(this.monthAgeAdults, monthAge['Adults'] || 0);
+            this._setText(this.monthAgeSeniors, monthAge['Seniors'] || 0);
 
-            // Update all-time stats
-            this.alltimeTotal.textContent = alltime.total_visitors || 0;
-            this.alltimeMale.textContent = alltime.male || 0;
-            this.alltimeFemale.textContent = alltime.female || 0;
-            this.alltimeUnknown.textContent = alltime.unknown || 0;
+            // All-time
+            this._setText(this.alltimeTotal, alltime.total_visitors || 0);
+            this._setText(this.alltimeMale, alltime.male || 0);
+            this._setText(this.alltimeFemale, alltime.female || 0);
+            this._setText(this.alltimeUnknown, alltime.unknown || 0);
 
-            // All-time age groups
             const alltimeAge = alltime.age_groups || {};
-            this.alltimeAgeChildren.textContent = alltimeAge['Children'] || 0;
-            this.alltimeAgeTeens.textContent = alltimeAge['Teens'] || 0;
-            this.alltimeAgeYoung.textContent = alltimeAge['Young Adults'] || 0;
-            this.alltimeAgeAdults.textContent = alltimeAge['Adults'] || 0;
-            this.alltimeAgeSeniors.textContent = alltimeAge['Seniors'] || 0;
+            this._setText(this.alltimeAgeChildren, alltimeAge['Children'] || 0);
+            this._setText(this.alltimeAgeTeens, alltimeAge['Teens'] || 0);
+            this._setText(this.alltimeAgeYoung, alltimeAge['Young Adults'] || 0);
+            this._setText(this.alltimeAgeAdults, alltimeAge['Adults'] || 0);
+            this._setText(this.alltimeAgeSeniors, alltimeAge['Seniors'] || 0);
         } catch (error) {
             console.error('Failed to fetch period stats:', error);
         }
@@ -377,25 +388,22 @@ class CCTVApp {
     async resetStats() {
         if (confirm('Reset today\'s visitor statistics?')) {
             try {
-                await fetch('/reset-stats', { method: 'POST' });
+                await fetch('/reset-stats', { method: 'POST', headers: this._headers() });
 
-                // Reset today's display immediately
-                this.totalVisitors.textContent = '0';
-                this.maleCount.textContent = '0';
-                this.femaleCount.textContent = '0';
-                this.unknownCount.textContent = '0';
-                this.malePercent.textContent = '0%';
-                this.femalePercent.textContent = '0%';
-                this.unknownPercent.textContent = '0%';
+                this._setText(this.totalVisitors, '0');
+                this._setText(this.maleCount, '0');
+                this._setText(this.femaleCount, '0');
+                this._setText(this.unknownCount, '0');
+                this._setText(this.malePercent, '0%');
+                this._setText(this.femalePercent, '0%');
+                this._setText(this.unknownPercent, '0%');
 
-                // Reset age stats
-                this.ageChildren.textContent = '0';
-                this.ageTeens.textContent = '0';
-                this.ageYoungAdults.textContent = '0';
-                this.ageAdults.textContent = '0';
-                this.ageSeniors.textContent = '0';
+                this._setText(this.ageChildren, '0');
+                this._setText(this.ageTeens, '0');
+                this._setText(this.ageYoungAdults, '0');
+                this._setText(this.ageAdults, '0');
+                this._setText(this.ageSeniors, '0');
 
-                // Refresh period stats
                 this.fetchPeriodStats();
             } catch (error) {
                 console.error('Failed to reset stats:', error);

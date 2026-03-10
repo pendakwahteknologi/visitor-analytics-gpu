@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass, field
 import time
 from collections import deque
+from statistics import median
 
 from config import YOLO_MODEL, CONFIDENCE_THRESHOLD
 
@@ -15,6 +16,8 @@ except ImportError:
     from visitor_state import VisitorStatePersistence
 
 logger = logging.getLogger(__name__)
+
+MIN_FACE_SIZE = 40  # Minimum face dimension in pixels
 
 
 @dataclass
@@ -49,20 +52,26 @@ class PersonDetector:
         self.model_path = model_path
         self.confidence = confidence
         self.model: Optional[YOLO] = None
+        self.model_loaded = False
+        self.last_detection_time: Optional[float] = None
         self._load_model()
 
     def _load_model(self):
         """Load the YOLO model."""
         try:
             self.model = YOLO(self.model_path)
+            self.model_loaded = True
             logger.info(f"Loaded YOLO model: {self.model_path}")
-        except Exception as e:
-            logger.error(f"Failed to load YOLO model: {e}")
+        except (FileNotFoundError, OSError) as e:
+            logger.error(f"Failed to load YOLO model file: {e}")
+            raise
+        except (RuntimeError, ValueError) as e:
+            logger.error(f"Failed to initialize YOLO model: {e}")
             raise
 
     def set_confidence(self, confidence: float):
         """Update confidence threshold."""
-        self.confidence = max(0.0, min(1.0, confidence))
+        self.confidence = max(0.1, min(0.95, confidence))
         logger.info(f"Confidence threshold set to {self.confidence}")
 
     def detect(self, frame: np.ndarray) -> List[Detection]:
@@ -92,8 +101,12 @@ class PersonDetector:
                     )
                     detections.append(detection)
 
-        except Exception as e:
-            logger.error(f"Detection error: {e}")
+            self.last_detection_time = time.time()
+
+        except (RuntimeError, ValueError) as e:
+            logger.error(f"YOLO inference error: {e}")
+        except cv2.error as e:
+            logger.error(f"OpenCV error during detection: {e}")
 
         return detections
 
@@ -128,19 +141,14 @@ class PersonDetector:
 
 
 class InsightFaceAnalyzer:
-    """Face analysis using InsightFace for accurate gender, age, and face embeddings.
-
-    Provides:
-    - More accurate age estimation (especially for children/teens)
-    - Better gender detection across ethnicities
-    - Face embeddings for re-identification (prevent double-counting)
-    """
+    """Face analysis using InsightFace for accurate gender, age, and face embeddings."""
 
     def __init__(self, confidence_threshold: float = 0.6, model_name: str = 'buffalo_l'):
         self.app = None
-        self.min_face_size = 25
+        self.min_face_size = MIN_FACE_SIZE
         self.confidence_threshold = confidence_threshold
         self.model_name = model_name
+        self.model_loaded = False
         self._load_model()
 
     def _load_model(self):
@@ -148,18 +156,15 @@ class InsightFaceAnalyzer:
         try:
             from insightface.app import FaceAnalysis
 
-            # Initialize InsightFace model (buffalo_l by default)
             self.app = FaceAnalysis(
                 name=self.model_name,
                 providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
             )
-            # Prepare with detection size
             self.app.prepare(ctx_id=0, det_size=(640, 640))
+            self.model_loaded = True
             logger.info(f"InsightFace analyzer initialized ({self.model_name} model)")
-            logger.info("Features: Gender + Age + Face Embeddings for re-identification")
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError) as e:
             logger.error(f"Failed to initialize InsightFace with {self.model_name}: {e}")
-            # Fall back to CPU only
             try:
                 from insightface.app import FaceAnalysis
                 self.app = FaceAnalysis(
@@ -167,21 +172,17 @@ class InsightFaceAnalyzer:
                     providers=['CPUExecutionProvider']
                 )
                 self.app.prepare(ctx_id=-1, det_size=(640, 640))
+                self.model_loaded = True
                 logger.info(f"InsightFace analyzer initialized ({self.model_name} - CPU mode)")
-            except Exception as e2:
+            except (ImportError, RuntimeError, OSError, ValueError) as e2:
                 logger.error(f"Failed to initialize InsightFace (CPU): {e2}")
                 raise
+        except ImportError as e:
+            logger.error(f"InsightFace package not available: {e}")
+            raise
 
     def analyze(self, frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> Dict:
-        """Analyze face for gender, age, and get embedding.
-
-        Args:
-            frame: Full frame
-            bbox: Person bounding box (x1, y1, x2, y2)
-
-        Returns:
-            Dict with gender, gender_confidence, age, age_group, and embedding
-        """
+        """Analyze face for gender, age, and get embedding."""
         result = {
             "gender": "Unknown",
             "gender_confidence": 0.0,
@@ -218,12 +219,18 @@ class InsightFaceAnalyzer:
             # Get the largest face (most likely the main person)
             face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
 
+            # Validate minimum face size
+            face_w = face.bbox[2] - face.bbox[0]
+            face_h = face.bbox[3] - face.bbox[1]
+            if face_w < self.min_face_size or face_h < self.min_face_size:
+                return result
+
             # Extract gender (0 = female, 1 = male in InsightFace)
             if hasattr(face, 'gender') and face.gender is not None:
                 gender_val = int(face.gender)
                 if gender_val == 1:
                     result["gender"] = "Male"
-                    result["gender_confidence"] = 0.9  # InsightFace doesn't provide confidence
+                    result["gender_confidence"] = 0.9
                 else:
                     result["gender"] = "Female"
                     result["gender_confidence"] = 0.9
@@ -240,8 +247,11 @@ class InsightFaceAnalyzer:
 
             return result
 
-        except Exception as e:
+        except (RuntimeError, ValueError, cv2.error) as e:
             logger.debug(f"InsightFace analysis failed: {e}")
+            return result
+        except (IndexError, TypeError, AttributeError) as e:
+            logger.debug(f"InsightFace result parsing error: {e}")
             return result
 
     def get_embedding(self, frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> Optional[np.ndarray]:
@@ -251,18 +261,12 @@ class InsightFaceAnalyzer:
 
 
 class EnsembleAnalyzer:
-    """Ensemble face analyzer combining InsightFace + DeepFace for better accuracy.
-
-    Uses multiple models and combines predictions:
-    - Age: Average of all models
-    - Gender: Majority voting
-    - Embedding: From InsightFace (most reliable)
-    """
+    """Ensemble face analyzer combining InsightFace + DeepFace for better accuracy."""
 
     def __init__(self, confidence_threshold: float = 0.6):
         self.insightface = InsightFaceAnalyzer(confidence_threshold, model_name='buffalo_l')
         self.use_deepface = True
-        self.min_face_size = 25
+        self.min_face_size = MIN_FACE_SIZE
         logger.info("Ensemble analyzer initialized: InsightFace (buffalo_l) + DeepFace")
 
     def _analyze_with_deepface(self, frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> Dict:
@@ -290,7 +294,6 @@ class EnsembleAnalyzer:
             if person_crop.size == 0 or person_crop.shape[0] < self.min_face_size or person_crop.shape[1] < self.min_face_size:
                 return result
 
-            # Use DeepFace with VGGFace backend (good for Asian faces)
             analysis = DeepFace.analyze(
                 img_path=person_crop,
                 actions=['gender', 'age'],
@@ -322,18 +325,19 @@ class EnsembleAnalyzer:
 
             return result
 
-        except Exception as e:
+        except ImportError as e:
+            logger.debug(f"DeepFace not available: {e}")
+            self.use_deepface = False
+            return result
+        except (RuntimeError, ValueError, cv2.error) as e:
             logger.debug(f"DeepFace analysis failed: {e}")
+            return result
+        except (IndexError, TypeError, KeyError) as e:
+            logger.debug(f"DeepFace result parsing error: {e}")
             return result
 
     def analyze(self, frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> Dict:
-        """Analyze face using ensemble of models.
-
-        Returns combined result with:
-        - Gender: Majority vote
-        - Age: Average prediction
-        - Embedding: From InsightFace
-        """
+        """Analyze face using ensemble of models."""
         # Get InsightFace prediction (primary)
         insightface_result = self.insightface.analyze(frame, bbox)
 
@@ -391,14 +395,18 @@ class VisitorTracker:
     Uses cosine similarity to compare face embeddings and determine if
     a detected person is a new visitor or someone already seen.
 
-    Improved with:
+    Features:
     - Multiple embeddings per visitor for better matching
-    - Confirmation system: must be detected as "new" multiple times before counting
+    - Confirmation system: must be detected multiple times before counting
     - Pending visitors: unconfirmed detections that need more evidence
+    - Median age aggregation across sightings for stable demographics
+    - Max visitor cap to bound memory usage
     """
 
-    def __init__(self, similarity_threshold: float = 0.3, memory_duration: int = 1800,
-                 confirmation_count: int = 1, pending_timeout: float = 10.0):
+    MAX_ACTIVE_VISITORS = 500
+
+    def __init__(self, similarity_threshold: float = 0.45, memory_duration: int = 1800,
+                 confirmation_count: int = 3, pending_timeout: float = 30.0):
         """
         Args:
             similarity_threshold: Cosine similarity threshold (0-1). Lower = more lenient matching.
@@ -429,11 +437,9 @@ class VisitorTracker:
         if emb1 is None or emb2 is None:
             return 0.0
 
-        # Normalize embeddings
         emb1_norm = emb1 / (np.linalg.norm(emb1) + 1e-10)
         emb2_norm = emb2 / (np.linalg.norm(emb2) + 1e-10)
 
-        # Calculate cosine similarity
         similarity = np.dot(emb1_norm, emb2_norm)
         return float(similarity)
 
@@ -462,35 +468,31 @@ class VisitorTracker:
         emb_score = self._get_best_similarity(embedding, visitor_data["embeddings"])
 
         # Gender matching bonus (20% weight)
-        # Strong bonus if gender matches exactly
         stored_gender = visitor_data.get("gender", "Unknown")
         if gender == stored_gender and gender != "Unknown":
-            gender_bonus = 0.20  # Full bonus for exact match
+            gender_bonus = 0.20
         elif gender == "Unknown" or stored_gender == "Unknown":
-            gender_bonus = 0.10  # Partial bonus if either is unknown
+            gender_bonus = 0.10
         else:
-            gender_bonus = 0.0  # No bonus for gender mismatch
+            gender_bonus = 0.0
 
         # Age group matching bonus (10% weight)
-        # Bonus based on age group proximity
         stored_age = visitor_data.get("age_group", "Unknown")
         age_bonus = self._calculate_age_bonus(age_group, stored_age)
 
         # Temporal recency bonus (10% weight)
-        # Recent visitors get higher match score
         time_delta = current_time - visitor_data.get("timestamp", 0)
-        if time_delta < 60:  # Within last minute
+        if time_delta < 60:
             temporal_bonus = 0.10
-        elif time_delta < 300:  # Within 5 minutes
+        elif time_delta < 300:
             temporal_bonus = 0.07
-        elif time_delta < 600:  # Within 10 minutes
+        elif time_delta < 600:
             temporal_bonus = 0.05
-        elif time_delta < 1200:  # Within 20 minutes
+        elif time_delta < 1200:
             temporal_bonus = 0.02
         else:
             temporal_bonus = 0.0
 
-        # Combined score
         final_score = emb_score + gender_bonus + age_bonus + temporal_bonus
 
         return final_score
@@ -498,12 +500,11 @@ class VisitorTracker:
     def _calculate_age_bonus(self, age1: str, age2: str) -> float:
         """Calculate age group matching bonus based on proximity."""
         if age1 == "Unknown" or age2 == "Unknown":
-            return 0.05  # Partial bonus if either is unknown
+            return 0.05
 
         if age1 == age2:
-            return 0.10  # Full bonus for exact match
+            return 0.10
 
-        # Age group proximity (adjacent groups get partial bonus)
         age_order = ["Children", "Teens", "Young Adults", "Adults", "Seniors"]
         try:
             idx1 = age_order.index(age1)
@@ -511,13 +512,28 @@ class VisitorTracker:
             distance = abs(idx1 - idx2)
 
             if distance == 1:
-                return 0.05  # Adjacent age groups
+                return 0.05
             elif distance == 2:
-                return 0.02  # One group apart
+                return 0.02
             else:
-                return 0.0   # Too far apart
+                return 0.0
         except ValueError:
             return 0.0
+
+    def _evict_oldest_visitors(self):
+        """Evict oldest visitors when over capacity to bound memory."""
+        if len(self.visitors) <= self.MAX_ACTIVE_VISITORS:
+            return
+
+        # Sort by timestamp (oldest first) and remove excess
+        sorted_ids = sorted(
+            self.visitors.keys(),
+            key=lambda vid: self.visitors[vid].get("timestamp", 0)
+        )
+        to_remove = len(self.visitors) - self.MAX_ACTIVE_VISITORS
+        for vid in sorted_ids[:to_remove]:
+            del self.visitors[vid]
+        logger.info(f"Evicted {to_remove} oldest visitors (cap: {self.MAX_ACTIVE_VISITORS})")
 
     def _cleanup_old_visitors(self):
         """Remove visitors from memory after memory_duration."""
@@ -539,21 +555,24 @@ class VisitorTracker:
         for pid in expired_ids:
             del self.pending_visitors[pid]
 
-    def check_visitor(self, embedding: np.ndarray, gender: str, age_group: str) -> Tuple[bool, int]:
+    def _get_median_age_group(self, age_observations: list) -> Tuple[int, str]:
+        """Compute median age and its group from a list of age observations."""
+        if not age_observations:
+            return None, "Unknown"
+        med_age = int(median(age_observations))
+        return med_age, get_age_group(med_age)
+
+    def check_visitor(self, embedding: np.ndarray, gender: str, age_group: str, age: Optional[int] = None) -> Tuple[bool, int]:
         """Check if this is a new visitor or someone already seen.
 
-        Uses multi-biometric fusion for improved accuracy:
-        - Face embedding similarity (60%)
-        - Gender matching bonus (20%)
-        - Age group matching bonus (10%)
-        - Temporal recency bonus (10%)
-
-        Plus confirmation system: must be detected multiple times before counting.
+        Uses multi-biometric fusion for improved accuracy plus a confirmation
+        system that requires multiple detections before counting.
 
         Args:
             embedding: Face embedding from InsightFace
             gender: Detected gender
             age_group: Detected age group
+            age: Raw age value (for median aggregation)
 
         Returns:
             Tuple of (is_new_visitor, visitor_id)
@@ -564,6 +583,7 @@ class VisitorTracker:
         # Clean up old visitors and pending
         self._cleanup_old_visitors()
         self._cleanup_pending_visitors()
+        self._evict_oldest_visitors()
 
         current_time = time.time()
 
@@ -577,7 +597,6 @@ class VisitorTracker:
         best_emb_similarity = 0.0
 
         for visitor_id, data in self.visitors.items():
-            # Calculate combined score using multi-biometric fusion
             score = self._calculate_match_score(embedding, data, gender, age_group, current_time)
             emb_sim = self._get_best_similarity(embedding, data["embeddings"])
 
@@ -586,26 +605,28 @@ class VisitorTracker:
                 best_match_id = visitor_id
                 best_emb_similarity = emb_sim
 
-        # If matches a confirmed visitor (combined score above threshold)
-        # Threshold is higher because we're adding bonuses
-        match_threshold = self.similarity_threshold + 0.15  # Adjust for bonuses
+        # Match threshold accounts for bonuses
+        match_threshold = self.similarity_threshold + 0.15
         if best_score >= match_threshold:
             visitor_data = self.visitors[best_match_id]
             visitor_data["timestamp"] = current_time
 
-            # Update gender/age if more confident detection
+            # Update gender if more confident
             if gender != "Unknown" and visitor_data.get("gender") == "Unknown":
                 visitor_data["gender"] = gender
-            if age_group != "Unknown" and visitor_data.get("age_group") == "Unknown":
-                visitor_data["age_group"] = age_group
+            # Record age observation and update via median
+            if age is not None:
+                visitor_data.setdefault("age_observations", []).append(age)
+                med_age, med_group = self._get_median_age_group(visitor_data["age_observations"])
+                visitor_data["age_group"] = med_group
 
-            # Add embedding for better future matching (only if embedding is different enough)
+            # Add embedding for better future matching
             if best_emb_similarity < 0.85 and len(visitor_data["embeddings"]) < self.max_embeddings_per_visitor:
                 visitor_data["embeddings"].append(embedding)
 
             return False, best_match_id
 
-        # Step 2: Check against pending visitors using multi-biometric fusion
+        # Step 2: Check against pending visitors
         best_pending_id = -1
         best_pending_score = 0.0
 
@@ -620,6 +641,8 @@ class VisitorTracker:
             pending_data = self.pending_visitors[best_pending_id]
             pending_data["count"] += 1
             pending_data["embeddings"].append(embedding)
+            if age is not None:
+                pending_data.setdefault("age_observations", []).append(age)
 
             # Check if confirmed enough times
             if pending_data["count"] >= self.confirmation_count:
@@ -627,11 +650,18 @@ class VisitorTracker:
                 visitor_id = self.next_visitor_id
                 self.next_visitor_id += 1
 
+                # Resolve demographics via median age
+                final_age_group = pending_data["age_group"]
+                age_obs = pending_data.get("age_observations", [])
+                if age_obs:
+                    _, final_age_group = self._get_median_age_group(age_obs)
+
                 self.visitors[visitor_id] = {
                     "embeddings": pending_data["embeddings"][-self.max_embeddings_per_visitor:],
                     "timestamp": current_time,
                     "gender": pending_data["gender"],
-                    "age_group": pending_data["age_group"]
+                    "age_group": final_age_group,
+                    "age_observations": age_obs,
                 }
 
                 # Update stats
@@ -641,70 +671,37 @@ class VisitorTracker:
                 elif pending_data["gender"] == "Female":
                     self.stats["female"] += 1
                 else:
-                    # Track unknown gender (still deduplicated via face embedding)
                     self.stats["unknown"] += 1
 
-                if pending_data["age_group"] and pending_data["age_group"] != "Unknown":
-                    if pending_data["age_group"] in self.stats["age_groups"]:
-                        self.stats["age_groups"][pending_data["age_group"]] += 1
+                if final_age_group and final_age_group != "Unknown":
+                    if final_age_group in self.stats["age_groups"]:
+                        self.stats["age_groups"][final_age_group] += 1
                 else:
-                    # Track unknown age groups (deduplicated via face embedding)
                     self.stats["age_groups"]["Unknown"] += 1
 
                 # Remove from pending
                 del self.pending_visitors[best_pending_id]
 
-                logger.info(f"New visitor #{visitor_id}: {pending_data['gender']}, {pending_data['age_group']} (confirmed after {self.confirmation_count} detections)")
+                logger.info(f"New visitor #{visitor_id}: {pending_data['gender']}, {final_age_group} (confirmed after {self.confirmation_count} detections)")
 
                 return True, visitor_id
 
             return False, -1  # Still pending
 
-        # Step 3: Create new visitor (immediate confirmation when confirmation_count <= 1)
-        if self.confirmation_count <= 1:
-            # Immediate confirmation - no pending phase
-            visitor_id = self.next_visitor_id
-            self.next_visitor_id += 1
+        # Step 3: Create new pending visitor (always goes through confirmation)
+        pending_id = self.next_pending_id
+        self.next_pending_id += 1
 
-            self.visitors[visitor_id] = {
-                "embeddings": [embedding],
-                "timestamp": current_time,
-                "gender": gender,
-                "age_group": age_group
-            }
+        self.pending_visitors[pending_id] = {
+            "embeddings": [embedding],
+            "timestamp": current_time,
+            "count": 1,
+            "gender": gender,
+            "age_group": age_group,
+            "age_observations": [age] if age is not None else [],
+        }
 
-            # Update stats immediately
-            self.stats["total_visitors"] += 1
-            if gender == "Male":
-                self.stats["male"] += 1
-            elif gender == "Female":
-                self.stats["female"] += 1
-            else:
-                self.stats["unknown"] += 1
-
-            if age_group and age_group != "Unknown":
-                if age_group in self.stats["age_groups"]:
-                    self.stats["age_groups"][age_group] += 1
-            else:
-                self.stats["age_groups"]["Unknown"] += 1
-
-            logger.info(f"New visitor #{visitor_id}: {gender}, {age_group} (instant detection)")
-
-            return True, visitor_id
-        else:
-            # Use pending system for confirmation_count > 1
-            pending_id = self.next_pending_id
-            self.next_pending_id += 1
-
-            self.pending_visitors[pending_id] = {
-                "embeddings": [embedding],
-                "timestamp": current_time,
-                "count": 1,
-                "gender": gender,
-                "age_group": age_group
-            }
-
-            return False, -1  # Pending, not counted yet
+        return False, -1  # Pending, not counted yet
 
     def get_active_visitor_count(self) -> int:
         """Get count of visitors currently in memory (recently seen)."""
@@ -744,46 +741,38 @@ class VisitorTracker:
     def reset_stats(self):
         """Reset all visitor statistics and memory."""
         self.visitors = {}
+        self.pending_visitors = {}
         self.next_visitor_id = 1
+        self.next_pending_id = 1
         self.stats = {
             "total_visitors": 0,
             "male": 0,
             "female": 0,
-            "unknown": 0,  # Track unknown gender (deduplicated via face embedding)
+            "unknown": 0,
             "age_groups": {
                 "Children": 0,
                 "Teens": 0,
                 "Young Adults": 0,
                 "Adults": 0,
                 "Seniors": 0,
-                "Unknown": 0  # Track unknown age groups
+                "Unknown": 0
             }
         }
         logger.info("VisitorTracker stats reset")
-
-# Legacy FaceAnalyzer for backward compatibility (uses InsightFace now)
-class FaceAnalyzer(InsightFaceAnalyzer):
-    """Backward compatible alias for InsightFaceAnalyzer."""
-    pass
-
-
-# Alias for backward compatibility
-GenderClassifier = FaceAnalyzer
 
 
 class DetectionEngine:
     """Combined detection engine for person detection, gender/age classification, and visitor tracking."""
 
-    def __init__(self, gender_threshold: float = 0.6, similarity_threshold: float = 0.3):
+    def __init__(self, gender_threshold: float = 0.6, similarity_threshold: float = 0.45):
         self.person_detector = PersonDetector()
-        # Use ensemble analyzer for better accuracy
         self.face_analyzer = EnsembleAnalyzer(confidence_threshold=gender_threshold)
         self.visitor_tracker = VisitorTracker(
             similarity_threshold=similarity_threshold,
-            memory_duration=1800  # Remember visitors for 30 minutes
+            memory_duration=1800,  # Remember visitors for 30 minutes
+            confirmation_count=3,  # Require 3 detections to confirm
+            pending_timeout=30.0,  # Allow 30s to gather confirmations
         )
-        # Alias for backward compatibility
-        self.gender_classifier = self.face_analyzer
         self.enable_gender = False
 
     def set_confidence(self, confidence: float):
@@ -821,7 +810,6 @@ class DetectionEngine:
 
         if self.enable_gender:
             for det in detections:
-                # Use InsightFace analyzer for gender, age, AND embedding
                 analysis = self.face_analyzer.analyze(frame, det.bbox)
 
                 det.gender = analysis["gender"]
@@ -835,7 +823,8 @@ class DetectionEngine:
                     is_new, visitor_id = self.visitor_tracker.check_visitor(
                         analysis["embedding"],
                         analysis["gender"],
-                        analysis["age_group"]
+                        analysis["age_group"],
+                        age=analysis["age"],
                     )
                     det.is_new_visitor = is_new
                     det.visitor_id = visitor_id
