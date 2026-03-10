@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aneka Walk Visitor Monitoring System</title>
-    <link rel="stylesheet" href="static/css/style.css?v=4.2.1">
+    <link rel="stylesheet" href="static/css/style.css?v=5.1.0">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -33,10 +33,26 @@
             </div>
         </header>
 
+        <!-- Mobile Tab Navigation -->
+        <nav class="mobile-tabs" id="mobile-tabs">
+            <button class="mobile-tab active" data-target="video-section" id="tab-video">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+                <span>Live Feed</span>
+            </button>
+            <button class="mobile-tab" data-target="stats-section" id="tab-stats">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+                <span>Statistics</span>
+            </button>
+        </nav>
+
         <!-- Main Content -->
         <main class="main-content">
             <!-- Left Side - Video Feed -->
-            <section class="video-section">
+            <section class="video-section" id="video-section">
                 <div class="video-container">
                     <img id="video-feed" alt="Live Feed" />
                     <div id="no-feed" class="no-feed">
@@ -185,7 +201,7 @@
             </section>
 
             <!-- Right Side - Statistics -->
-            <aside class="stats-section">
+            <aside class="stats-section" id="stats-section">
                 <!-- Today's Visitors -->
                 <div class="stats-card stats-card-primary">
                     <div class="stats-card-header">
@@ -351,6 +367,6 @@
         </main>
     </div>
 
-    <script src="static/js/app.js?v=4.2.1"></script>
+    <script src="static/js/app.js?v=5.1.0"></script>
 </body>
 </html>

@@ -103,11 +103,42 @@ class CCTVApp {
 
     init() {
         this.bindEvents();
+        this.initMobileTabs();
         this.loadSettings();
         this.startStatsPolling();
         this.startPeriodStatsPolling();
         this.startClock();
         this.connectWebSocket();
+    }
+
+    initMobileTabs() {
+        const tabs = document.querySelectorAll('.mobile-tab');
+        if (!tabs.length) return;
+
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const targetId = tab.dataset.target;
+
+                // Update tab active state
+                tabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+
+                // Show/hide sections
+                const videoSection = document.getElementById('video-section');
+                const statsSection = document.getElementById('stats-section');
+
+                if (targetId === 'video-section') {
+                    videoSection && videoSection.classList.remove('tab-hidden');
+                    statsSection && statsSection.classList.add('tab-hidden');
+                } else {
+                    statsSection && statsSection.classList.remove('tab-hidden');
+                    videoSection && videoSection.classList.add('tab-hidden');
+                }
+
+                // Scroll to top when switching tabs
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            });
+        });
     }
 
     bindEvents() {
