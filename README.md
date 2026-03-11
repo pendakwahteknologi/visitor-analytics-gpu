@@ -141,7 +141,8 @@ visitor-analytics/
 │   └── atomic_write.py      # Safe file writing utilities
 ├── frontend/
 │   ├── index.html           # Dashboard UI (face + person capture panels)
-│   └── login.html           # Login page
+│   ├── login.html           # Login page
+│   └── detect-all.html      # YOLO all-classes explorer
 ├── static/
 │   ├── css/style.css        # Dark theme styling
 │   └── js/app.js            # Dashboard logic, WebSocket, capture tiles
@@ -238,6 +239,7 @@ Download from: `https://visitor-analysis.local/rootCA.pem`
 | URL | Description |
 |---|---|
 | `https://visitor-analysis.local` | Main dashboard |
+| `https://visitor-analysis.local/detect-all` | YOLO all-classes explorer (all 80 COCO classes) |
 | `https://visitor-analysis.local/rootCA.pem` | Download CA certificate |
 | `http://visitor-analysis.local` | Auto-redirects to HTTPS |
 
@@ -318,7 +320,9 @@ Works on any DHCP network — `visitor-analysis.local` resolves via mDNS regardl
 | `/reset-stats` | POST | Yes | Reset today's stats |
 | `/capture/faces` | GET | Yes | Recent face captures |
 | `/capture/persons` | GET | Yes | Recent person captures |
+| `/detect-all` | GET | — | YOLO all-classes explorer |
 | `/ws/stream` | WebSocket | Yes | Live video feed |
+| `/ws/detect-all` | WebSocket | — | YOLO all-classes stream |
 | `/rootCA.pem` | GET | — | Download CA certificate |
 
 ---
