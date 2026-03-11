@@ -120,10 +120,8 @@ class VisitorStatePersistence:
                 int(k): v
                 for k, v in self._deserialize_visitors(state.get("persons", {})).items()
             }
-            pending = {
-                int(k): v
-                for k, v in self._deserialize_visitors(state.get("pending", {})).items()
-            }
+            # pending keys are UUID hex strings — keep as str, not int
+            pending = dict(self._deserialize_visitors(state.get("pending", {})))
             stats = state.get("stats", default_stats)
             next_person_id = state.get("next_person_id", 1)
 

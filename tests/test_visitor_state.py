@@ -44,6 +44,24 @@ class TestBodyReIDPersistence:
         assert stats["total_visitors"] == 0
         assert nid == 1
 
+    def test_pending_uuid_keys_survive_roundtrip(self, tmp_path):
+        """Pending keys are UUID hex strings — they must not be coerced to int."""
+        from visitor_state import VisitorStatePersistence
+        import uuid
+        persistence = VisitorStatePersistence(data_dir=str(tmp_path))
+        persons = {}
+        uuid_key = uuid.uuid4().hex
+        pending = {
+            uuid_key: {"embeddings": [], "count": 2, "timestamp": 1000.0,
+                       "gender_obs": [], "age_obs": []}
+        }
+        stats = {"total_visitors": 0, "male": 0, "female": 0, "unknown": 0,
+                 "age_groups": {"Children": 0, "Teens": 0, "Young Adults": 0,
+                                "Adults": 0, "Seniors": 0, "Unknown": 0}}
+        persistence.save_state(persons, pending, stats, next_person_id=1)
+        _, pe2, _, _ = persistence.restore_state()
+        assert uuid_key in pe2  # key must remain a string, not crash on int()
+
 
 class TestEncryption:
     def test_plain_when_no_key(self):
