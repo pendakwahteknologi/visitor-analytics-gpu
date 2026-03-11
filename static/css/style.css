@@ -1232,3 +1232,127 @@ body {
         font-size: 1.25rem;
     }
 }
+
+/* =========================================================
+   Face Captures Panel
+   ========================================================= */
+.face-captures-panel {
+    background: var(--surface, #1e2130);
+    border-radius: 12px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+.face-captures-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+}
+
+.face-captures-header h3 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary, #8892a4);
+    margin: 0;
+}
+
+.face-capture-count {
+    font-size: 0.7rem;
+    background: var(--accent, #3b82f6);
+    color: #fff;
+    border-radius: 999px;
+    padding: 0.15rem 0.55rem;
+    font-weight: 600;
+}
+
+.face-captures-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    overflow: hidden;
+    max-height: 440px;
+}
+
+.face-captures-empty {
+    color: var(--text-secondary, #8892a4);
+    font-size: 0.78rem;
+    text-align: center;
+    padding: 1rem 0;
+}
+
+.face-tile {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    background: var(--surface-2, #252a3a);
+    border-radius: 8px;
+    padding: 0.4rem 0.5rem;
+    border-left: 3px solid transparent;
+    animation: face-tile-in 0.2s ease-out;
+    flex-shrink: 0;
+}
+
+@keyframes face-tile-in {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.face-tile.male   { border-left-color: #3b82f6; }
+.face-tile.female { border-left-color: #ec4899; }
+
+.face-tile-img {
+    width: 48px;
+    height: 64px;
+    object-fit: cover;
+    border-radius: 4px;
+    flex-shrink: 0;
+    background: var(--surface, #1e2130);
+}
+
+.face-tile-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.face-tile-gender {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-primary, #e2e8f0);
+}
+
+.face-tile-age {
+    font-size: 0.72rem;
+    color: var(--text-secondary, #8892a4);
+}
+
+.face-tile-visitor {
+    font-size: 0.7rem;
+    color: var(--text-secondary, #8892a4);
+}
+
+.face-tile-time {
+    font-size: 0.68rem;
+    color: var(--text-tertiary, #64748b);
+}
+
+.face-new-badge {
+    font-size: 0.62rem;
+    font-weight: 700;
+    background: #10b981;
+    color: #fff;
+    border-radius: 4px;
+    padding: 0.1rem 0.35rem;
+    margin-left: 0.25rem;
+    vertical-align: middle;
+}
+
+.face-unconfirmed {
+    color: var(--text-tertiary, #64748b);
+    font-style: italic;
+}
