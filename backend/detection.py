@@ -391,6 +391,83 @@ class EnsembleAnalyzer:
         return final_result
 
 
+class OSNetAnalyzer:
+    """Extract body Re-ID embeddings using OSNet-x1.0 via torchreid.
+
+    Input: full-body bbox crop from the resized 1280px frame.
+    Output: 512-dim L2-normalised embedding, or None on failure/unavailability.
+    """
+
+    INPUT_H = 256
+    INPUT_W = 128
+
+    def __init__(self):
+        self.available = False
+        self.extractor = None
+        self._init_model()
+
+    def _init_model(self) -> None:
+        try:
+            import torchreid
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.extractor = torchreid.utils.FeatureExtractor(
+                model_name="osnet_x1_0",
+                device=device,
+            )
+            self.available = True
+            logger.info("OSNetAnalyzer initialized (device=%s)", device)
+        except Exception as e:
+            logger.warning("OSNet unavailable — falling back to count-only mode: %s", e)
+            self.available = False
+
+    def extract(
+        self,
+        frame: np.ndarray,
+        bbox: Tuple[int, int, int, int],
+    ) -> Optional[np.ndarray]:
+        """Extract body embedding from frame at bbox.
+
+        Returns L2-normalised 512-dim float32 array or None.
+        """
+        if not self.available or self.extractor is None:
+            return None
+
+        x1, y1, x2, y2 = bbox
+        h_frame, w_frame = frame.shape[:2]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w_frame, x2), min(h_frame, y2)
+
+        if (x2 - x1) < 32 or (y2 - y1) < 32:
+            return None
+
+        try:
+            crop = frame[y1:y2, x1:x2]
+            resized = self._letterbox(crop)
+            rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+            features = self.extractor([rgb])  # shape (1, 512)
+            emb = features[0].cpu().numpy().astype(np.float32)
+            norm = np.linalg.norm(emb)
+            if norm > 1e-10:
+                emb = emb / norm
+            return emb
+        except Exception as e:
+            logger.warning("OSNet inference error: %s", e)
+            return None
+
+    def _letterbox(self, img: np.ndarray) -> np.ndarray:
+        """Letterbox to INPUT_H×INPUT_W preserving aspect ratio, black fill."""
+        h, w = img.shape[:2]
+        scale = min(self.INPUT_H / h, self.INPUT_W / w)
+        new_h, new_w = int(h * scale), int(w * scale)
+        resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        canvas = np.zeros((self.INPUT_H, self.INPUT_W, 3), dtype=np.uint8)
+        pad_top = (self.INPUT_H - new_h) // 2
+        pad_left = (self.INPUT_W - new_w) // 2
+        canvas[pad_top:pad_top + new_h, pad_left:pad_left + new_w] = resized
+        return canvas
+
+
 class VisitorTracker:
     """Track unique visitors using face embeddings to prevent double-counting.
 
