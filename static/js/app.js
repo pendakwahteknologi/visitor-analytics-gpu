@@ -109,6 +109,7 @@ class CCTVApp {
         this.startPeriodStatsPolling();
         this.startClock();
         this.connectWebSocket();
+        this.loadFaceCaptures();
     }
 
     initMobileTabs() {
@@ -241,6 +242,8 @@ class CCTVApp {
                     }
                 } else if (message.type === 'status') {
                     this.handleCCTVStatus(message.data);
+                } else if (message.type === 'face_capture') {
+                    this.prependFaceTile(message.data);
                 }
             } catch (error) {
                 console.error('Error processing WebSocket message:', error);
@@ -448,6 +451,85 @@ class CCTVApp {
     }
     downloadReport() {
         window.location.href = 'stats/export/pdf';
+    }
+
+    buildFaceTile(capture) {
+        const tile = document.createElement('div');
+        tile.className = 'face-tile ' + (capture.gender === 'Male' ? 'male' : 'female');
+
+        const img = document.createElement('img');
+        img.className = 'face-tile-img';
+        img.src = capture.url;
+        img.alt = 'Face';
+        img.onerror = function() { this.style.opacity = '0.3'; };
+
+        const info = document.createElement('div');
+        info.className = 'face-tile-info';
+
+        const genderEl = document.createElement('div');
+        genderEl.className = 'face-tile-gender';
+        genderEl.textContent = capture.gender;
+
+        const ageEl = document.createElement('div');
+        ageEl.className = 'face-tile-age';
+        ageEl.textContent = capture.age != null
+            ? capture.age + 'y \u00B7 ' + (capture.age_group || '')
+            : (capture.age_group || '');
+
+        const visitorEl = document.createElement('div');
+        visitorEl.className = 'face-tile-visitor';
+        if (capture.visitor_id != null) {
+            visitorEl.textContent = 'Visitor #' + capture.visitor_id;
+            if (capture.is_new_visitor) {
+                const badge = document.createElement('span');
+                badge.className = 'face-new-badge';
+                badge.textContent = 'NEW';
+                visitorEl.appendChild(badge);
+            }
+        } else {
+            visitorEl.textContent = 'Unconfirmed';
+            visitorEl.classList.add('face-unconfirmed');
+        }
+
+        const timeEl = document.createElement('div');
+        timeEl.className = 'face-tile-time';
+        timeEl.textContent = new Date(capture.timestamp * 1000).toLocaleTimeString();
+
+        info.appendChild(genderEl);
+        info.appendChild(ageEl);
+        info.appendChild(visitorEl);
+        info.appendChild(timeEl);
+        tile.appendChild(img);
+        tile.appendChild(info);
+        return tile;
+    }
+
+    prependFaceTile(capture) {
+        const body = document.getElementById('face-captures-body');
+        const empty = document.getElementById('face-captures-empty');
+        if (empty) empty.remove();
+
+        body.insertBefore(this.buildFaceTile(capture), body.firstChild);
+
+        // Rolling window: keep max 20 tiles
+        while (body.children.length > 20) {
+            body.removeChild(body.lastChild);
+        }
+
+        const counter = document.getElementById('face-capture-count');
+        if (counter) counter.textContent = parseInt(counter.textContent || '0') + 1;
+    }
+
+    async loadFaceCaptures() {
+        try {
+            const resp = await fetch('/faces', { headers: this._headers() });
+            if (!resp.ok) return;
+            const captures = await resp.json();
+            // API returns newest-first; reverse so prepend builds correct top-to-bottom order
+            [...captures].reverse().forEach(c => this.prependFaceTile(c));
+        } catch (e) {
+            console.warn('Could not load face captures:', e);
+        }
     }
 }
 
