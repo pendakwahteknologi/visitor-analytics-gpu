@@ -5,6 +5,7 @@ import signal
 import logging
 import time
 import hmac
+import cv2
 import hashlib
 import secrets
 import threading
