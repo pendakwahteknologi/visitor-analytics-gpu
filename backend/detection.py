@@ -782,12 +782,14 @@ class BodyReIDTracker:
         memory_duration: int = 1800,
         confirmation_count: int = 3,
         pending_timeout: float = 30.0,
+        max_active_persons: int = 500,
     ):
         self.match_threshold = match_threshold
         self.pending_threshold = pending_threshold
         self.memory_duration = memory_duration
         self.confirmation_count = confirmation_count
         self.pending_timeout = pending_timeout
+        self.MAX_ACTIVE_PERSONS = max_active_persons
 
         self.persons: Dict[int, dict] = {}
         self.pending: Dict[str, dict] = {}
@@ -987,6 +989,11 @@ class BodyReIDTracker:
         age_group: Optional[str],
     ) -> Tuple[bool, int]:
         """Bypass confirmation — immediate count (OSNet unavailable)."""
+        # LRU eviction to keep persons dict bounded
+        if len(self.persons) >= self.MAX_ACTIVE_PERSONS:
+            oldest = min(self.persons, key=lambda p: self.persons[p]["timestamp"])
+            del self.persons[oldest]
+
         person_id = self.next_person_id
         self.next_person_id += 1
         resolved_gender = gender if gender and gender != "Unknown" else None

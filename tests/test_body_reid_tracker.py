@@ -174,8 +174,25 @@ class TestPendingTimeout:
 # ---------------------------------------------------------------------------
 
 class TestLRUEviction:
-    def test_evicts_oldest_when_at_capacity(self, tracker):
-        tracker.MAX_ACTIVE_PERSONS = 3
+    def test_evicts_oldest_when_at_capacity(self):
+        with patch("detection.VisitorStatePersistence") as MockPersist:
+            mock = MockPersist.return_value
+            mock.restore_state.return_value = (
+                {}, {},
+                {"total_visitors": 0, "male": 0, "female": 0, "unknown": 0,
+                 "age_groups": {"Children": 0, "Teens": 0, "Young Adults": 0,
+                                "Adults": 0, "Seniors": 0, "Unknown": 0}},
+                1,
+            )
+            mock.save_state.return_value = None
+            tracker = BodyReIDTracker(
+                match_threshold=0.60,
+                pending_threshold=0.55,
+                confirmation_count=3,
+                pending_timeout=30.0,
+                max_active_persons=3,
+            )
+
         embs = [_rand_emb() for _ in range(4)]
         for i, e in enumerate(embs[:3]):
             for _ in range(3):
