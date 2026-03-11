@@ -6,7 +6,8 @@ from typing import List, Dict, Tuple, Optional
 import logging
 from dataclasses import dataclass, field
 import time
-from collections import deque
+import uuid
+from collections import deque, Counter
 from statistics import median
 
 from config import YOLO_MODEL, CONFIDENCE_THRESHOLD
@@ -762,6 +763,323 @@ class VisitorTracker:
             }
         }
         logger.info("VisitorTracker stats reset")
+
+
+class BodyReIDTracker:
+    """Primary unique person counter using OSNet body embeddings.
+
+    Uses body appearance Re-ID as the authoritative unique person count.
+    Gender/age are optional enrichment — attributed when InsightFace succeeds.
+    Falls back to count-only mode when OSNet is unavailable.
+    """
+
+    MAX_ACTIVE_PERSONS = 500
+
+    def __init__(
+        self,
+        match_threshold: float = 0.60,
+        pending_threshold: float = 0.55,
+        memory_duration: int = 1800,
+        confirmation_count: int = 3,
+        pending_timeout: float = 30.0,
+    ):
+        self.match_threshold = match_threshold
+        self.pending_threshold = pending_threshold
+        self.memory_duration = memory_duration
+        self.confirmation_count = confirmation_count
+        self.pending_timeout = pending_timeout
+
+        self.persons: Dict[int, dict] = {}
+        self.pending: Dict[str, dict] = {}
+        self.next_person_id: int = 1
+        self.stats: Dict = {
+            "total_visitors": 0,
+            "male": 0,
+            "female": 0,
+            "unknown": 0,
+            "age_groups": {
+                "Children": 0, "Teens": 0, "Young Adults": 0,
+                "Adults": 0, "Seniors": 0, "Unknown": 0,
+            },
+        }
+
+        self.state_persistence = VisitorStatePersistence()
+        self._restore_state()
+        self.last_save_time = time.time()
+        logger.info(
+            "BodyReIDTracker initialized: threshold=%.2f, confirmations=%d",
+            match_threshold, confirmation_count,
+        )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def check_person(
+        self,
+        body_embedding: Optional[np.ndarray],
+        gender: Optional[str] = None,
+        age: Optional[int] = None,
+        age_group: Optional[str] = None,
+    ) -> Tuple[bool, Optional[int]]:
+        """Check if this body embedding is a new or known person.
+
+        Returns:
+            (True, person_id)  — just confirmed as new unique person
+            (False, person_id) — known confirmed person seen again
+            (False, None)      — still pending or no match yet
+        """
+        now = time.time()
+        self._evict_expired(now)
+
+        if body_embedding is None:
+            return self._count_only(gender, age, age_group)
+
+        # 1. Match against confirmed persons
+        for person_id, person in self.persons.items():
+            score = self._best_score(body_embedding, person["embeddings"])
+            if score >= self.match_threshold:
+                person["timestamp"] = now
+                person["embeddings"] = self._update_embeddings(
+                    person["embeddings"], body_embedding
+                )
+                # Enrich gender/age if not yet attributed
+                if gender and gender != "Unknown":
+                    self._try_attach_gender_to_record(person_id, person, gender, age, age_group)
+                return (False, person_id)
+
+        # 2. Match against pending
+        for pending_key, pending in list(self.pending.items()):
+            score = self._best_score(body_embedding, pending["embeddings"])
+            if score >= self.pending_threshold:
+                pending["count"] += 1
+                pending["embeddings"] = self._update_embeddings(
+                    pending["embeddings"], body_embedding
+                )
+                pending["timestamp"] = now
+                if gender and gender != "Unknown":
+                    pending.setdefault("gender_obs", []).append(gender)
+                if age is not None:
+                    pending.setdefault("age_obs", []).append(age)
+                if pending["count"] >= self.confirmation_count:
+                    person_id = self._promote(pending_key, pending)
+                    return (True, person_id)
+                return (False, None)
+
+        # 3. New pending record
+        self.pending[uuid.uuid4().hex] = {
+            "embeddings": [body_embedding],
+            "count": 1,
+            "timestamp": now,
+            "gender_obs": [gender] if gender and gender != "Unknown" else [],
+            "age_obs": [age] if age is not None else [],
+        }
+        return (False, None)
+
+    def attach_gender(
+        self,
+        person_id: int,
+        gender: str,
+        age: Optional[int],
+        age_group: Optional[str],
+    ) -> None:
+        """Attach gender/age to an already-confirmed person."""
+        person = self.persons.get(person_id)
+        if person is None:
+            return
+        self._try_attach_gender_to_record(person_id, person, gender, age, age_group)
+
+    def reset(self) -> None:
+        """Clear all state and reset stats to zero."""
+        self.persons = {}
+        self.pending = {}
+        self.next_person_id = 1
+        self.stats = {
+            "total_visitors": 0, "male": 0, "female": 0, "unknown": 0,
+            "age_groups": {
+                "Children": 0, "Teens": 0, "Young Adults": 0,
+                "Adults": 0, "Seniors": 0, "Unknown": 0,
+            },
+        }
+        logger.info("BodyReIDTracker reset")
+
+    def save_state(self) -> None:
+        """Persist state to disk."""
+        self.state_persistence.save_state(
+            persons=self.persons,
+            pending=self.pending,
+            stats=self.stats,
+            next_person_id=self.next_person_id,
+        )
+        self.last_save_time = time.time()
+
+    def get_stats(self) -> dict:
+        return self.stats.copy()
+
+    def get_active_person_count(self) -> int:
+        return len(self.persons)
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _restore_state(self) -> None:
+        try:
+            persons, pending, stats, next_person_id = self.state_persistence.restore_state()
+            self.persons = persons
+            self.pending = pending
+            self.stats = stats
+            self.next_person_id = next_person_id
+            logger.info(
+                "BodyReIDTracker restored: %d confirmed, %d total",
+                len(self.persons), self.stats["total_visitors"],
+            )
+        except Exception as e:
+            logger.warning("BodyReIDTracker state restore failed, starting fresh: %s", e)
+
+    def _promote(self, pending_key: str, pending: dict) -> int:
+        """Promote a pending record to confirmed. Returns new person_id."""
+        person_id = self.next_person_id
+        self.next_person_id += 1
+
+        gender_obs = pending.get("gender_obs", [])
+        age_obs = pending.get("age_obs", [])
+        gender = self._majority_gender(gender_obs)
+        age = int(median(age_obs)) if age_obs else None
+        age_group = get_age_group(age) if age is not None else "Unknown"
+
+        self.persons[person_id] = {
+            "embeddings": pending["embeddings"],
+            "timestamp": pending["timestamp"],
+            "gender": gender,
+            "age_obs": age_obs,
+            "age_group": age_group,
+        }
+
+        # LRU eviction
+        if len(self.persons) > self.MAX_ACTIVE_PERSONS:
+            oldest = min(self.persons, key=lambda pid: self.persons[pid]["timestamp"])
+            del self.persons[oldest]
+
+        del self.pending[pending_key]
+
+        # Update stats
+        self.stats["total_visitors"] += 1
+        if gender == "Male":
+            self.stats["male"] += 1
+        elif gender == "Female":
+            self.stats["female"] += 1
+        else:
+            self.stats["unknown"] += 1
+        self.stats["age_groups"][age_group] = (
+            self.stats["age_groups"].get(age_group, 0) + 1
+        )
+
+        if time.time() - self.last_save_time >= 30:
+            self.save_state()
+
+        return person_id
+
+    def _count_only(
+        self,
+        gender: Optional[str],
+        age: Optional[int],
+        age_group: Optional[str],
+    ) -> Tuple[bool, int]:
+        """Bypass confirmation — immediate count (OSNet unavailable)."""
+        person_id = self.next_person_id
+        self.next_person_id += 1
+        resolved_gender = gender if gender and gender != "Unknown" else None
+        resolved_ag = age_group or "Unknown"
+        self.persons[person_id] = {
+            "embeddings": [],
+            "timestamp": time.time(),
+            "gender": resolved_gender,
+            "age_obs": [age] if age is not None else [],
+            "age_group": resolved_ag,
+        }
+        self.stats["total_visitors"] += 1
+        if resolved_gender == "Male":
+            self.stats["male"] += 1
+        elif resolved_gender == "Female":
+            self.stats["female"] += 1
+        else:
+            self.stats["unknown"] += 1
+        self.stats["age_groups"][resolved_ag] = (
+            self.stats["age_groups"].get(resolved_ag, 0) + 1
+        )
+        return (True, person_id)
+
+    def _try_attach_gender_to_record(
+        self,
+        person_id: int,
+        person: dict,
+        gender: str,
+        age: Optional[int],
+        age_group: Optional[str],
+    ) -> None:
+        """Attach gender to a confirmed person if not already attributed."""
+        if person.get("gender") in (None, "Unknown") and gender and gender != "Unknown":
+            old_gender = person.get("gender")
+            person["gender"] = gender
+            person["age_group"] = age_group
+            if age is not None:
+                person.setdefault("age_obs", []).append(age)
+            self._update_gender_stats(old_gender, gender)
+
+    def _update_gender_stats(self, old_gender: Optional[str], new_gender: str) -> None:
+        """Shift gender count: remove old, add new."""
+        if old_gender in (None, "Unknown"):
+            self.stats["unknown"] = max(0, self.stats["unknown"] - 1)
+        elif old_gender == "Male":
+            self.stats["male"] = max(0, self.stats["male"] - 1)
+        elif old_gender == "Female":
+            self.stats["female"] = max(0, self.stats["female"] - 1)
+
+        if new_gender == "Male":
+            self.stats["male"] += 1
+        elif new_gender == "Female":
+            self.stats["female"] += 1
+        else:
+            self.stats["unknown"] += 1
+
+    def _evict_expired(self, now: float) -> None:
+        expired_persons = [
+            pid for pid, p in self.persons.items()
+            if now - p["timestamp"] > self.memory_duration
+        ]
+        for pid in expired_persons:
+            del self.persons[pid]
+
+        expired_pending = [
+            key for key, p in self.pending.items()
+            if now - p["timestamp"] > self.pending_timeout
+        ]
+        for key in expired_pending:
+            del self.pending[key]
+
+    def _best_score(self, query: np.ndarray, stored: list) -> float:
+        if not stored:
+            return 0.0
+        return max(self._cosine_similarity(query, emb) for emb in stored)
+
+    def _cosine_similarity(self, a: np.ndarray, b: np.ndarray) -> float:
+        if a is None or b is None:
+            return 0.0
+        a_n = a / (np.linalg.norm(a) + 1e-10)
+        b_n = b / (np.linalg.norm(b) + 1e-10)
+        return float(np.dot(a_n, b_n))
+
+    def _update_embeddings(self, stored: list, new_emb: np.ndarray, max_stored: int = 5) -> list:
+        stored = stored + [new_emb]
+        return stored[-max_stored:]
+
+    def _majority_gender(self, observations: list) -> Optional[str]:
+        if not observations:
+            return None
+        counts = Counter(observations)
+        top = counts.most_common(1)[0]
+        return top[0]
 
 
 class DetectionEngine:
