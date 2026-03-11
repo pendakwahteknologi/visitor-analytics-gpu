@@ -504,7 +504,7 @@ class CCTVApp {
         return tile;
     }
 
-    prependFaceTile(capture) {
+    prependFaceTile(capture, silent = false) {
         const body = document.getElementById('face-captures-body');
         const empty = document.getElementById('face-captures-empty');
         if (empty) empty.remove();
@@ -516,8 +516,10 @@ class CCTVApp {
             body.removeChild(body.lastChild);
         }
 
-        const counter = document.getElementById('face-capture-count');
-        if (counter) counter.textContent = parseInt(counter.textContent || '0') + 1;
+        if (!silent) {
+            const counter = document.getElementById('face-capture-count');
+            if (counter) counter.textContent = parseInt(counter.textContent || '0') + 1;
+        }
     }
 
     async loadFaceCaptures() {
@@ -526,7 +528,7 @@ class CCTVApp {
             if (!resp.ok) return;
             const captures = await resp.json();
             // API returns newest-first; reverse so prepend builds correct top-to-bottom order
-            [...captures].reverse().forEach(c => this.prependFaceTile(c));
+            [...captures].reverse().forEach(c => this.prependFaceTile(c, true));
         } catch (e) {
             console.warn('Could not load face captures:', e);
         }
