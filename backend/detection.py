@@ -57,6 +57,7 @@ class PersonDetector:
         self.model: Optional[YOLO] = None
         self.model_loaded = False
         self.last_detection_time: Optional[float] = None
+        self.model_lock = threading.Lock()   # serialises all YOLO inference calls
         self._load_model()
 
     def _load_model(self):
@@ -85,31 +86,32 @@ class PersonDetector:
 
         detections = []
 
-        try:
-            # Use smaller image size for faster inference
-            results = self.model(frame, conf=self.confidence, classes=[0], verbose=False, imgsz=1280, half=True, device=0, iou=0.45)
+        with self.model_lock:
+            try:
+                # Use smaller image size for faster inference
+                results = self.model(frame, conf=self.confidence, classes=[0], verbose=False, imgsz=1280, half=True, device=0, iou=0.45)
 
-            for result in results:
-                boxes = result.boxes
-                if boxes is None:
-                    continue
+                for result in results:
+                    boxes = result.boxes
+                    if boxes is None:
+                        continue
 
-                for box in boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                    conf = float(box.conf[0])
+                    for box in boxes:
+                        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                        conf = float(box.conf[0])
 
-                    detection = Detection(
-                        bbox=(x1, y1, x2, y2),
-                        confidence=conf
-                    )
-                    detections.append(detection)
+                        detection = Detection(
+                            bbox=(x1, y1, x2, y2),
+                            confidence=conf
+                        )
+                        detections.append(detection)
 
-            self.last_detection_time = time.time()
+                self.last_detection_time = time.time()
 
-        except (RuntimeError, ValueError) as e:
-            logger.error(f"YOLO inference error: {e}")
-        except cv2.error as e:
-            logger.error(f"OpenCV error during detection: {e}")
+            except (RuntimeError, ValueError) as e:
+                logger.error(f"YOLO inference error: {e}")
+            except cv2.error as e:
+                logger.error(f"OpenCV error during detection: {e}")
 
         return detections
 
@@ -124,33 +126,34 @@ class PersonDetector:
             return []
 
         detections = []
-        try:
-            results = self.model.track(
-                frame,
-                persist=True,
-                tracker="bytetrack.yaml",
-                classes=[0],
-                conf=self.confidence,
-                iou=0.45,
-                device=0,
-                half=True,
-                imgsz=1280,
-                verbose=False,
-            )
-            for result in results:
-                boxes = result.boxes
-                if boxes is None:
-                    continue
-                for box in boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                    conf = float(box.conf[0])
-                    tid = int(box.id[0]) if box.id is not None else None
-                    detections.append(Detection(bbox=(x1, y1, x2, y2), confidence=conf, track_id=tid))
-            self.last_detection_time = time.time()
-        except (RuntimeError, ValueError) as e:
-            logger.error(f"YOLO track error: {e}")
-        except cv2.error as e:
-            logger.error(f"OpenCV error during tracking: {e}")
+        with self.model_lock:
+            try:
+                results = self.model.track(
+                    frame,
+                    persist=True,
+                    tracker="bytetrack.yaml",
+                    classes=[0],
+                    conf=self.confidence,
+                    iou=0.45,
+                    device=0,
+                    half=True,
+                    imgsz=1280,
+                    verbose=False,
+                )
+                for result in results:
+                    boxes = result.boxes
+                    if boxes is None:
+                        continue
+                    for box in boxes:
+                        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                        conf = float(box.conf[0])
+                        tid = int(box.id[0]) if box.id is not None else None
+                        detections.append(Detection(bbox=(x1, y1, x2, y2), confidence=conf, track_id=tid))
+                self.last_detection_time = time.time()
+            except (RuntimeError, ValueError) as e:
+                logger.error(f"YOLO track error: {e}")
+            except cv2.error as e:
+                logger.error(f"OpenCV error during tracking: {e}")
 
         return detections
 

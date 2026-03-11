@@ -178,6 +178,19 @@ class StreamManager:
         """Main streaming loop with optimized detection and visitor tracking."""
         import time
 
+        while self.streaming:
+            try:
+                await self._stream_loop_inner()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("Stream loop crashed — restarting in 1s: %s", e, exc_info=True)
+                await asyncio.sleep(1)
+
+    async def _stream_loop_inner(self):
+        """Inner streaming loop — restarted automatically on any unhandled exception."""
+        import time
+
         fps_counter = 0
         fps_timer = time.time()
         frame_counter = 0

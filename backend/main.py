@@ -726,8 +726,11 @@ async def websocket_detect_all(websocket: WebSocket):
                 COLORS[cls_id] = (int(b * 255), int(g * 255), int(r * 255))
             return COLORS[cls_id]
 
+        model_lock = detection_engine.person_detector.model_lock
+
         def process_frame(frame):
-            results = model(frame, verbose=False, imgsz=1280, half=True, device=0, conf=0.3)
+            with model_lock:
+                results = model(frame, verbose=False, imgsz=1280, half=True, device=0, conf=0.3)
             detections = []
             annotated = frame.copy()
             for result in results:
