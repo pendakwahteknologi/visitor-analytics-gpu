@@ -3,10 +3,12 @@ import asyncio
 import base64
 import json
 import logging
+import os
 from typing import Set, Dict, Any
 from fastapi import WebSocket, WebSocketDisconnect
 
 from config import JPEG_QUALITY, STREAM_FPS
+from face_capture_store import FaceCaptureStore
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +104,11 @@ class StreamManager:
         self.streaming = False
         self.stream_task = None
         self.frame_interval = 1.0 / STREAM_FPS
+
+        _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.face_store = FaceCaptureStore(
+            capture_dir=os.path.join(_project_root, "backend", "data", "face_captures")
+        )
 
         # Current frame stats (for live display)
         self.current_stats = {
@@ -204,6 +211,29 @@ class StreamManager:
                 if is_detection_frame:
                     # Run person detection
                     detections = self.detection_engine.person_detector.detect(resized_frame)
+
+                    # Carry forward gender/age from previous detections by nearest bbox centre
+                    if self.detection_engine.enable_gender and last_detections:
+                        def _centre(bbox):
+                            x1, y1, x2, y2 = bbox
+                            return ((x1 + x2) / 2, (y1 + y2) / 2)
+
+                        for det in detections:
+                            cx, cy = _centre(det.bbox)
+                            best = min(
+                                last_detections,
+                                key=lambda d: ((_centre(d.bbox)[0] - cx) ** 2 + (_centre(d.bbox)[1] - cy) ** 2)
+                            )
+                            bx, by = _centre(best.bbox)
+                            # Only inherit if the previous detection was close (within 150px)
+                            if ((bx - cx) ** 2 + (by - cy) ** 2) ** 0.5 < 150:
+                                det.gender = best.gender
+                                det.gender_confidence = best.gender_confidence
+                                det.age = best.age
+                                det.age_group = best.age_group
+                                det.embedding = best.embedding
+                                det.visitor_id = best.visitor_id
+
                     last_detections = detections
 
                     # Initialize age group stats for current frame
@@ -237,6 +267,18 @@ class StreamManager:
                                 )
                                 det.is_new_visitor = is_new
                                 det.visitor_id = visitor_id
+
+                            # Save face crop when gender is known
+                            if analysis.get("gender") and analysis["gender"] != "Unknown":
+                                face_record = self.face_store.save_capture(
+                                    resized_frame,
+                                    det.bbox,
+                                    analysis,
+                                    visitor_id=det.visitor_id,
+                                    is_new_visitor=getattr(det, "is_new_visitor", False),
+                                )
+                                if face_record:
+                                    await self._broadcast_face_capture(face_record)
 
                             # Count age groups for current frame display
                             if det.age_group and det.age_group != "Unknown":
@@ -318,6 +360,23 @@ class StreamManager:
             "connections": self.connection_manager.connection_count,
             "active_visitors": self.detection_engine.get_active_visitors()
         }
+
+    async def _broadcast_face_capture(self, record: dict) -> None:
+        """Broadcast a face_capture event to all connected WebSocket clients."""
+        message = json.dumps({
+            "type": "face_capture",
+            "data": {
+                "id": record["id"],
+                "url": f"/faces/{record['filename']}",
+                "timestamp": record["timestamp"],
+                "gender": record["gender"],
+                "age": record["age"],
+                "age_group": record["age_group"],
+                "visitor_id": record["visitor_id"],
+                "is_new_visitor": record["is_new_visitor"],
+            }
+        })
+        await self.connection_manager.broadcast_frame(message)
 
     def reset_session_stats(self):
         """Reset visitor tracking statistics."""
