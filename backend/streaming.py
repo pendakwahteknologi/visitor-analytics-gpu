@@ -9,6 +9,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from config import JPEG_QUALITY, STREAM_FPS
 from face_capture_store import FaceCaptureStore
+from person_capture_store import PersonCaptureStore
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,10 @@ class StreamManager:
         _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.face_store = FaceCaptureStore(
             capture_dir=os.path.join(_project_root, "backend", "data", "face_captures")
+        )
+
+        self.person_store = PersonCaptureStore(
+            capture_dir=os.path.join(_project_root, "backend", "data", "person_captures")
         )
 
         # Current frame stats (for live display)
@@ -290,6 +295,78 @@ class StreamManager:
                             else:
                                 age_groups["Unknown"] += 1
 
+                    # --- Body Re-ID (independent of gender analysis) ---
+                    if is_analysis_frame:
+                        loop = asyncio.get_event_loop()
+                        # Build per-detection gender/age from analyses if available
+                        if self.detection_engine.enable_gender and 'analyses' in locals():
+                            det_analyses = analyses
+                        else:
+                            det_analyses = [{}] * len(detections)
+
+                        # Extract body embeddings in parallel (non-blocking)
+                        body_embeddings = await asyncio.gather(*[
+                            loop.run_in_executor(
+                                None,
+                                self.detection_engine.osnet.extract,
+                                resized_frame,
+                                det.bbox,
+                            )
+                            for det in detections
+                        ], return_exceptions=True)
+
+                        for det, body_emb, analysis in zip(detections, body_embeddings, det_analyses):
+                            if isinstance(body_emb, Exception):
+                                body_emb = None
+                            gender = analysis.get("gender") if analysis else None
+                            age = analysis.get("age") if analysis else None
+                            age_group = analysis.get("age_group") if analysis else None
+
+                            is_new, person_id = self.detection_engine.body_tracker.check_person(
+                                body_emb,
+                                gender=gender,
+                                age=age,
+                                age_group=age_group,
+                            )
+
+                            if person_id is not None:
+                                det.visitor_id = person_id
+                                det.is_new_visitor = is_new
+
+                            if is_new and person_id is not None:
+                                try:
+                                    person_record = self.person_store.save_capture(
+                                        resized_frame, det.bbox,
+                                        person_id=person_id,
+                                        gender=gender,
+                                        age=age,
+                                        age_group=age_group,
+                                        is_new=True,
+                                    )
+                                    if person_record:
+                                        await self._broadcast_person_capture(person_record)
+                                except Exception as e:
+                                    logger.error("Person capture error: %s", e)
+
+                            elif not is_new and person_id is not None:
+                                if gender and gender != "Unknown":
+                                    self.detection_engine.body_tracker.attach_gender(
+                                        person_id, gender, age, age_group
+                                    )
+                                try:
+                                    person_record = self.person_store.save_capture(
+                                        resized_frame, det.bbox,
+                                        person_id=person_id,
+                                        gender=gender,
+                                        age=age,
+                                        age_group=age_group,
+                                        is_new=False,
+                                    )
+                                    if person_record:
+                                        await self._broadcast_person_capture(person_record)
+                                except Exception as e:
+                                    logger.error("Person capture refresh error: %s", e)
+
                     # Calculate stats for current frame display
                     stats = {
                         "total_people": len(detections),
@@ -378,6 +455,23 @@ class StreamManager:
                 "age_group": record["age_group"],
                 "visitor_id": record["visitor_id"],
                 "is_new_visitor": record["is_new_visitor"],
+            }
+        })
+        await self.connection_manager.broadcast_frame(message)
+
+    async def _broadcast_person_capture(self, record: dict) -> None:
+        """Broadcast a person_capture event to all connected WebSocket clients."""
+        message = json.dumps({
+            "type": "person_capture",
+            "data": {
+                "id": record["id"],
+                "url": f"/persons/{record['filename']}",
+                "timestamp": record["timestamp"],
+                "gender": record["gender"],
+                "age": record["age"],
+                "age_group": record["age_group"],
+                "person_id": record["person_id"],
+                "is_new": record["is_new"],
             }
         })
         await self.connection_manager.broadcast_frame(message)
