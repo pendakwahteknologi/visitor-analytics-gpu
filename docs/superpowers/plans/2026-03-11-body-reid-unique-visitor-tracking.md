@@ -1309,7 +1309,7 @@ In `_stream_loop`, find the `if is_detection_frame:` block. Inside it, find the 
                     if is_analysis_frame:
                         loop = asyncio.get_event_loop()
                         # Build per-detection gender/age from analyses if available
-                        if self.detection_engine.enable_gender and 'analyses' in dir():
+                        if self.detection_engine.enable_gender and 'analyses' in locals():
                             det_analyses = analyses
                         else:
                             det_analyses = [{}] * len(detections)
