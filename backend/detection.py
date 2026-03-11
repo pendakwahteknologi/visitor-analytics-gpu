@@ -410,7 +410,10 @@ class OSNetAnalyzer:
         try:
             import torchreid
             import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            # Always run OSNet on CPU — YOLO and InsightFace claim the GPU;
+            # OSNet's model is small enough that CPU inference at 4-frame
+            # intervals does not affect throughput.
+            device = "cpu"
             self.extractor = torchreid.utils.FeatureExtractor(
                 model_name="osnet_x1_0",
                 device=device,
