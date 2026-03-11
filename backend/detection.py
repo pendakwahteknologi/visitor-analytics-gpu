@@ -137,17 +137,20 @@ class PersonDetector:
                 imgsz=1280,
                 verbose=False,
             )
-            if results and results[0].boxes is not None:
-                for box in results[0].boxes:
+            for result in results:
+                boxes = result.boxes
+                if boxes is None:
+                    continue
+                for box in boxes:
                     x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                     conf = float(box.conf[0])
                     tid = int(box.id[0]) if box.id is not None else None
                     detections.append(Detection(bbox=(x1, y1, x2, y2), confidence=conf, track_id=tid))
             self.last_detection_time = time.time()
         except (RuntimeError, ValueError) as e:
-            logger.error("YOLO track error: %s", e)
+            logger.error(f"YOLO track error: {e}")
         except cv2.error as e:
-            logger.error("OpenCV error during tracking: %s", e)
+            logger.error(f"OpenCV error during tracking: {e}")
 
         return detections
 
