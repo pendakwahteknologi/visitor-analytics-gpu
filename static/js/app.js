@@ -537,6 +537,8 @@ class CCTVApp {
             const captures = await resp.json();
             // API returns newest-first; reverse so prepend builds correct top-to-bottom order
             [...captures].reverse().forEach(c => this.prependFaceTile(c, true));
+            const counter = document.getElementById('face-capture-count');
+            if (counter && captures.length) counter.textContent = captures.length;
         } catch (e) {
             console.warn('Could not load face captures:', e);
         }
@@ -596,6 +598,8 @@ class CCTVApp {
             const captures = await resp.json();
             // API returns newest-first; reverse so prepend builds correct order
             [...captures].reverse().forEach(c => this.prependPersonTile(c, true));
+            const counter = document.getElementById('person-capture-count');
+            if (counter && captures.length) counter.textContent = captures.length;
         } catch (e) {
             console.warn('Could not load person captures:', e);
         }

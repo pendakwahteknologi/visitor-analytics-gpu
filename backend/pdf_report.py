@@ -138,15 +138,17 @@ def _kpi_cards(today: Dict, weekly: Dict, monthly: Dict, alltime: Dict,
 
     header_row = []
     value_row = []
+    sub_row = []
     for label, stats in cards_data:
         header_row.append(Paragraph(label.upper(), styles["kpi_label"]))
         value_row.append(Paragraph(
             f"{stats.get('total_visitors', 0):,}", styles["kpi_value"]
         ))
+        sub_row.append(Paragraph("unique persons", styles["kpi_label"]))
 
     card_w = CONTENT_W / 4
-    table = Table([header_row, value_row], colWidths=[card_w] * 4,
-                  rowHeights=[14, 30])
+    table = Table([header_row, value_row, sub_row], colWidths=[card_w] * 4,
+                  rowHeights=[14, 30, 12])
     table.setStyle(TableStyle([
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -228,7 +230,7 @@ def _summary_block(stats: Dict) -> Table:
 
 def _daily_table(daily_rows: List[Dict]) -> Table:
     """Daily breakdown table with compact columns."""
-    header = ["Date", "Total", "Male", "Female", "Unk",
+    header = ["Date", "Persons", "Male", "Female", "Unk",
               "Child", "Teen", "Y.Adult", "Adult", "Senior"]
     data = [header]
     for row in daily_rows:
@@ -290,7 +292,7 @@ def _build_section(title: str, stats: Dict, daily_rows: List[Dict],
     total = stats.get("total_visitors", 0)
     if show_total:
         section_title = f"{title}  <font size='10' color='#{MID_GREY.hexval()[2:]}'>" \
-                        f"&mdash;  {total:,} visitors</font>"
+                        f"&mdash;  {total:,} unique persons</font>"
     else:
         section_title = title
 
