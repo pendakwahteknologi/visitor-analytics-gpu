@@ -143,8 +143,9 @@ Both endpoints require auth (`require_auth` dependency), consistent with `/faces
   1. For each detection, extract body crop from resized frame at raw YOLO bbox.
   2. Run `OSNetAnalyzer.extract(body_crop)` → `body_embedding` (or `None`).
   3. If `body_embedding` is not None: call `BodyReIDTracker.check_person(body_embedding, gender, age, age_group)` — pass gender/age from InsightFace if available in the same frame (run InsightFace first in the loop).
-  4. If result is `(True, person_id)` (confirmed new) or throttle allows: call `PersonCaptureStore.save_capture(...)`. If a record is returned, broadcast `person_capture` WS event.
-  5. If result is `(False, person_id)` and person_id is not None (already confirmed, seen again): call `BodyReIDTracker.attach_gender(person_id, gender, age, age_group)` when gender is known.
+  4a. If result is `(True, person_id)` (confirmed new): call `PersonCaptureStore.save_capture(..., is_new=True)`. If a record is returned, broadcast `person_capture` WS event.
+  4b. If result is `(False, person_id)` and `person_id is not None` (already confirmed, seen again) and throttle allows: call `PersonCaptureStore.save_capture(..., is_new=False)` to refresh the crop.
+  5. If result is `(False, person_id)` and `person_id is not None`: call `BodyReIDTracker.attach_gender(person_id, gender, age, age_group)` when gender is known.
 - `reset_session_stats()` calls `self.detection_engine.reset_visitor_stats()` (which now resets `BodyReIDTracker`). No other change needed here.
 
 #### `main.py`
@@ -158,7 +159,9 @@ Both endpoints require auth (`require_auth` dependency), consistent with `/faces
 
 #### `visitor_state.py` — `VisitorStatePersistence`
 - Replace `VisitorTracker` serialization with `BodyReIDTracker` serialization.
-- Same save/restore API: `save_state(body_tracker)`, `restore_state(body_tracker)`.
+- Updated API:
+  - `save_state(persons, pending, stats, next_person_id)` — four positional parameters matching `BodyReIDTracker` fields.
+  - `restore_state() → (persons, pending, stats, next_person_id)` — returns the same four fields as a tuple.
 
 ### Frontend
 
