@@ -1272,7 +1272,7 @@ body {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    overflow: hidden;
+    overflow-y: hidden;
     max-height: 440px;
 }
 
@@ -1300,8 +1300,8 @@ body {
     to   { opacity: 1; transform: translateY(0); }
 }
 
-.face-tile.male   { border-left-color: #3b82f6; }
-.face-tile.female { border-left-color: #ec4899; }
+.face-tile.male,   .face-tile-male   { border-left-color: #3b82f6; }
+.face-tile.female, .face-tile-female { border-left-color: #ec4899; }
 
 .face-tile-img {
     width: 48px;
