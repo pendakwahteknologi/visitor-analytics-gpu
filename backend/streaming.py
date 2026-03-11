@@ -225,7 +225,11 @@ class StreamManager:
                 is_analysis_frame = frame_counter % analysis_interval == 0
 
                 # ByteTrack: called every frame for consistent tracker state
-                detections = self.detection_engine.person_detector.track(resized_frame)
+                # run_in_executor prevents blocking the asyncio event loop
+                loop = asyncio.get_event_loop()
+                detections = await loop.run_in_executor(
+                    None, self.detection_engine.person_detector.track, resized_frame
+                )
 
                 # Drop detections too small to be a real person (avoids count inflation)
                 detections = [
