@@ -270,16 +270,19 @@ class StreamManager:
 
                             # Save face crop when gender is known
                             if analysis.get("gender") and analysis["gender"] != "Unknown":
-                                has_embedding = analysis.get("embedding") is not None
-                                face_record = self.face_store.save_capture(
-                                    resized_frame,
-                                    det.bbox,
-                                    analysis,
-                                    visitor_id=det.visitor_id if has_embedding else None,
-                                    is_new_visitor=getattr(det, "is_new_visitor", False) if has_embedding else False,
-                                )
-                                if face_record:
-                                    await self._broadcast_face_capture(face_record)
+                                try:
+                                    has_embedding = analysis.get("embedding") is not None
+                                    face_record = self.face_store.save_capture(
+                                        resized_frame,
+                                        det.bbox,
+                                        analysis,
+                                        visitor_id=getattr(det, "visitor_id", None) if has_embedding else None,
+                                        is_new_visitor=getattr(det, "is_new_visitor", False) if has_embedding else False,
+                                    )
+                                    if face_record:
+                                        await self._broadcast_face_capture(face_record)
+                                except Exception as e:
+                                    logger.error(f"Face capture error: {e}")
 
                             # Count age groups for current frame display
                             if det.age_group and det.age_group != "Unknown":
