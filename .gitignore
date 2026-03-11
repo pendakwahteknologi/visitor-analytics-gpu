@@ -45,3 +45,4 @@ screenshot/
 # SSL certificates (private keys must not be committed)
 certs/key.pem
 certs/rootCA-key.pem
+backend/data/face_captures/
