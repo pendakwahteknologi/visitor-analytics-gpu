@@ -1183,11 +1183,13 @@ class DetectionEngine:
     def __init__(self, gender_threshold: float = 0.6, similarity_threshold: float = 0.45):
         self.person_detector = PersonDetector()
         self.face_analyzer = EnsembleAnalyzer(confidence_threshold=gender_threshold)
-        self.visitor_tracker = VisitorTracker(
-            similarity_threshold=similarity_threshold,
-            memory_duration=1800,  # Remember visitors for 30 minutes
-            confirmation_count=3,  # Require 3 detections to confirm
-            pending_timeout=30.0,  # Allow 30s to gather confirmations
+        self.osnet = OSNetAnalyzer()
+        self.body_tracker = BodyReIDTracker(
+            match_threshold=similarity_threshold + 0.15,  # 0.60 default
+            pending_threshold=similarity_threshold + 0.10,  # 0.55 default
+            memory_duration=1800,
+            confirmation_count=3,
+            pending_timeout=30.0,
         )
         self.enable_gender = False
 
@@ -1200,9 +1202,10 @@ class DetectionEngine:
         self.enable_gender = enabled
 
     def set_similarity_threshold(self, threshold: float):
-        """Set face similarity threshold for re-identification."""
-        self.visitor_tracker.similarity_threshold = max(0.0, min(1.0, threshold))
-        logger.info(f"Similarity threshold set to {self.visitor_tracker.similarity_threshold}")
+        """Set body similarity threshold for re-identification."""
+        self.body_tracker.match_threshold = max(0.0, min(1.0, threshold + 0.15))
+        self.body_tracker.pending_threshold = max(0.0, min(1.0, threshold + 0.10))
+        logger.info(f"Body similarity threshold set to {self.body_tracker.match_threshold}")
 
     def process_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, List[Detection], Dict]:
         """Process a frame and return annotated frame, detections, and stats."""
@@ -1234,19 +1237,6 @@ class DetectionEngine:
                 det.age_group = analysis["age_group"]
                 det.embedding = analysis["embedding"]
 
-                # Check if this is a new visitor using face re-identification
-                if analysis["embedding"] is not None:
-                    is_new, visitor_id = self.visitor_tracker.check_visitor(
-                        analysis["embedding"],
-                        analysis["gender"],
-                        analysis["age_group"],
-                        age=analysis["age"],
-                    )
-                    det.is_new_visitor = is_new
-                    det.visitor_id = visitor_id
-                    if is_new:
-                        stats["new_visitors"] += 1
-
                 # Update gender stats (for current frame display)
                 if analysis["gender"] == "Male":
                     stats["male"] += 1
@@ -1265,13 +1255,13 @@ class DetectionEngine:
         return annotated_frame, detections, stats
 
     def get_visitor_stats(self) -> Dict:
-        """Get accumulated visitor statistics (unique visitors only)."""
-        return self.visitor_tracker.get_stats()
+        """Get accumulated visitor statistics (unique persons)."""
+        return self.body_tracker.get_stats()
 
     def reset_visitor_stats(self):
         """Reset visitor tracking stats."""
-        self.visitor_tracker.reset_stats()
+        self.body_tracker.reset()
 
     def get_active_visitors(self) -> int:
-        """Get count of visitors currently being tracked (recently seen)."""
-        return self.visitor_tracker.get_active_visitor_count()
+        """Get count of persons currently being tracked."""
+        return self.body_tracker.get_active_person_count()
