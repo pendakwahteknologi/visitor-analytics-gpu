@@ -243,7 +243,7 @@ def _handle_shutdown_signal(signum, frame):
     sig_name = signal.Signals(signum).name
     logger.info(f"Received {sig_name} — saving visitor state before exit")
     try:
-        detection_engine.visitor_tracker.save_state()
+        detection_engine.body_tracker.save_state()
         logger.info("Visitor state saved successfully on signal")
     except Exception as e:
         logger.error(f"Error saving state on signal: {e}")
@@ -282,18 +282,31 @@ async def lifespan(app: FastAPI):
 
     cleanup_task = asyncio.create_task(_face_cleanup_loop())
 
+    async def _person_cleanup_loop():
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                deleted = stream_manager.person_store.cleanup_expired()
+                if deleted:
+                    logger.info("Person capture cleanup: deleted %d expired files", deleted)
+            except Exception as e:
+                logger.error("Person capture cleanup error: %s", e)
+
+    person_cleanup_task = asyncio.create_task(_person_cleanup_loop())
+
     yield
 
     logger.info("Shutting down application...")
     try:
-        detection_engine.visitor_tracker.save_state()
+        detection_engine.body_tracker.save_state()
         logger.info("Visitor state saved successfully")
     except Exception as e:
         logger.error(f"Error saving visitor state on shutdown: {e}")
 
     cleanup_task.cancel()
+    person_cleanup_task.cancel()
     try:
-        await cleanup_task
+        await asyncio.gather(cleanup_task, person_cleanup_task, return_exceptions=True)
     except asyncio.CancelledError:
         pass
 
@@ -439,6 +452,7 @@ async def health_check():
         "models": {
             "yolo_loaded": detector.model_loaded,
             "insightface_loaded": detection_engine.face_analyzer.insightface.model_loaded,
+            "osnet_loaded": detection_engine.osnet.available,
             "last_detection": detector.last_detection_time,
         },
         "active_visitors": detection_engine.get_active_visitors(),
@@ -633,6 +647,27 @@ async def get_face_image(filename: str):
     path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "backend", "data", "face_captures", filename,
+    )
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.get("/persons", dependencies=[Depends(require_auth)])
+async def list_persons():
+    """Return the last 20 person captures, newest first."""
+    records = stream_manager.person_store.get_recent(limit=20)
+    return [{**r, "url": f"/persons/{r['filename']}"} for r in records]
+
+
+@app.get("/persons/{filename}", dependencies=[Depends(require_auth)])
+async def get_person_image(filename: str):
+    """Serve a person body crop JPEG."""
+    if not re.fullmatch(r"[a-zA-Z0-9_\-]+\.jpg", filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "backend", "data", "person_captures", filename,
     )
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="Not found")
