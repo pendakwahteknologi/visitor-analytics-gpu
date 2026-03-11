@@ -1222,6 +1222,49 @@ class BodyReIDTracker:
         return top[0]
 
 
+class BodyGenderAnalyzer:
+    """Body-based gender classification using HuggingFace image classifier.
+
+    Lazy-loads the model on first predict() call to avoid slowing startup.
+    Returns None gracefully when score is below threshold or on any error.
+    Only invoked when enable_gender=True in the streaming loop.
+    """
+    MODEL_NAME = "rizvandwiki/gender-classification-2"
+
+    def __init__(self):
+        self._pipe = None  # lazy-loaded
+
+    def _ensure_loaded(self):
+        if self._pipe is None:
+            from transformers import pipeline as hf_pipeline
+            self._pipe = hf_pipeline(
+                "image-classification",
+                model=self.MODEL_NAME,
+                device=-1,  # CPU only
+            )
+            logger.info("BodyGenderAnalyzer: loaded %s", self.MODEL_NAME)
+
+    def predict(self, crop_bgr: np.ndarray) -> Optional[str]:
+        """Return 'Male', 'Female', or None (below threshold or error).
+
+        Args:
+            crop_bgr: BGR numpy array — person bounding-box crop from frame[y1:y2, x1:x2].
+        """
+        try:
+            self._ensure_loaded()
+            from PIL import Image
+            rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb)
+            result = self._pipe(pil_img)
+            if not result or result[0]["score"] < BODY_GENDER_CONFIDENCE:
+                return None
+            label = result[0]["label"].lower()
+            return "Female" if "female" in label else "Male"
+        except Exception as e:
+            logger.warning("BodyGenderAnalyzer.predict failed: %s", e)
+            return None
+
+
 class DetectionEngine:
     """Combined detection engine for person detection, gender/age classification, and visitor tracking."""
 
@@ -1237,6 +1280,7 @@ class DetectionEngine:
             pending_timeout=30.0,
         )
         self.enable_gender = False
+        self.body_gender = BodyGenderAnalyzer()
 
     def set_confidence(self, confidence: float):
         """Set detection confidence threshold."""
