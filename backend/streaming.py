@@ -262,17 +262,6 @@ class StreamManager:
                             det.age_group = analysis["age_group"]
                             det.embedding = analysis["embedding"]
 
-                            # Check if this is a new visitor (re-identification)
-                            if analysis["embedding"] is not None:
-                                is_new, visitor_id = self.detection_engine.visitor_tracker.check_visitor(
-                                    analysis["embedding"],
-                                    analysis["gender"],
-                                    analysis["age_group"],
-                                    age=analysis["age"],
-                                )
-                                det.is_new_visitor = is_new
-                                det.visitor_id = visitor_id
-
                             # Save face crop when gender is known
                             if analysis.get("gender") and analysis["gender"] != "Unknown":
                                 try:
@@ -321,6 +310,11 @@ class StreamManager:
                             gender = analysis.get("gender") if analysis else None
                             age = analysis.get("age") if analysis else None
                             age_group = analysis.get("age_group") if analysis else None
+
+                            # Skip Re-ID for crops that are too small for OSNet when
+                            # OSNet is available — avoids inflating count via _count_only.
+                            if body_emb is None and self.detection_engine.osnet.available:
+                                continue
 
                             is_new, person_id = self.detection_engine.body_tracker.check_person(
                                 body_emb,
