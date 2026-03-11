@@ -948,6 +948,11 @@ class BodyReIDTracker:
         age = int(median(age_obs)) if age_obs else None
         age_group = get_age_group(age) if age is not None else "Unknown"
 
+        # LRU eviction — evict before inserting to never exceed MAX_ACTIVE_PERSONS
+        if len(self.persons) >= self.MAX_ACTIVE_PERSONS:
+            oldest = min(self.persons, key=lambda p: self.persons[p]["timestamp"])
+            del self.persons[oldest]
+
         self.persons[person_id] = {
             "embeddings": pending["embeddings"],
             "timestamp": pending["timestamp"],
@@ -955,11 +960,6 @@ class BodyReIDTracker:
             "age_obs": age_obs,
             "age_group": age_group,
         }
-
-        # LRU eviction
-        if len(self.persons) > self.MAX_ACTIVE_PERSONS:
-            oldest = min(self.persons, key=lambda pid: self.persons[pid]["timestamp"])
-            del self.persons[oldest]
 
         del self.pending[pending_key]
 
@@ -1021,11 +1021,22 @@ class BodyReIDTracker:
         """Attach gender to a confirmed person if not already attributed."""
         if person.get("gender") in (None, "Unknown") and gender and gender != "Unknown":
             old_gender = person.get("gender")
+            old_age_group = person.get("age_group", "Unknown")
             person["gender"] = gender
-            person["age_group"] = age_group
+            if age_group:
+                person["age_group"] = age_group
             if age is not None:
                 person.setdefault("age_obs", []).append(age)
             self._update_gender_stats(old_gender, gender)
+            # Update age_group stats if age_group changed
+            new_age_group = person.get("age_group", "Unknown")
+            if age_group and new_age_group != old_age_group:
+                self.stats["age_groups"][old_age_group] = max(
+                    0, self.stats["age_groups"].get(old_age_group, 0) - 1
+                )
+                self.stats["age_groups"][new_age_group] = (
+                    self.stats["age_groups"].get(new_age_group, 0) + 1
+                )
 
     def _update_gender_stats(self, old_gender: Optional[str], new_gender: str) -> None:
         """Shift gender count: remove old, add new."""
@@ -1074,9 +1085,9 @@ class BodyReIDTracker:
         stored = stored + [new_emb]
         return stored[-max_stored:]
 
-    def _majority_gender(self, observations: list) -> Optional[str]:
+    def _majority_gender(self, observations: list) -> str:
         if not observations:
-            return None
+            return "Unknown"
         counts = Counter(observations)
         top = counts.most_common(1)[0]
         return top[0]

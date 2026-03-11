@@ -125,6 +125,15 @@ class TestGenderAttribution:
         assert tracker.stats["male"] == 1
         assert tracker.stats["total_visitors"] == 1
 
+    def test_attach_gender_updates_age_groups_stats(self, tracker):
+        emb = _rand_emb()
+        for _ in range(3):
+            tracker.check_person(_similar_emb(emb))  # confirmed with unknown gender/age → "Unknown" age_group
+        assert tracker.stats["age_groups"]["Unknown"] == 1
+        tracker.attach_gender(1, "Female", age=25, age_group="Young Adults")
+        assert tracker.stats["age_groups"]["Young Adults"] == 1
+        assert tracker.stats["age_groups"]["Unknown"] == 0
+
 
 # ---------------------------------------------------------------------------
 # Re-identification
@@ -212,3 +221,22 @@ class TestCountOnlyMode:
         assert pid == 1
         assert tracker.stats["total_visitors"] == 1
         assert tracker.stats["male"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Memory eviction
+# ---------------------------------------------------------------------------
+
+class TestMemoryEviction:
+    def test_confirmed_person_evicted_after_memory_duration(self, tracker):
+        emb = _rand_emb()
+        for _ in range(3):
+            tracker.check_person(_similar_emb(emb))
+        assert len(tracker.persons) == 1
+
+        # Back-date the person's timestamp beyond memory_duration
+        tracker.persons[1]["timestamp"] -= tracker.memory_duration + 1
+
+        # Trigger eviction by calling check_person
+        tracker.check_person(_rand_emb())
+        assert 1 not in tracker.persons
