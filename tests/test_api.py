@@ -86,6 +86,9 @@ def client():
         main_module.detection_engine = mock_engine
         main_module.stream_manager = mock_stream
 
+        # Disable rate limiting for tests so late-running tests aren't throttled
+        main_module.rate_limiter.allow = lambda key: True
+
         from fastapi.testclient import TestClient
         with TestClient(main_module.app) as tc:
             yield tc
@@ -285,5 +288,9 @@ class TestFaceEndpoints:
         assert resp.status_code == 404
 
     def test_get_face_image_rejects_path_traversal(self, client):
-        resp = client.get("/faces/..%2Fsecret.txt", headers={"X-API-Key": "test-secret-key"})
-        assert resp.status_code in (400, 404)
+        resp = client.get("/faces/..%5Csecret.txt", headers={"X-API-Key": "test-secret-key"})
+        assert resp.status_code == 400
+
+    def test_get_face_image_requires_auth(self, client):
+        resp = client.get("/faces/someface.jpg")
+        assert resp.status_code == 401

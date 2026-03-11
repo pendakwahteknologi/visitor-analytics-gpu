@@ -280,7 +280,7 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.error("Face capture cleanup error: %s", e)
 
-    asyncio.create_task(_face_cleanup_loop())
+    cleanup_task = asyncio.create_task(_face_cleanup_loop())
 
     yield
 
@@ -290,6 +290,12 @@ async def lifespan(app: FastAPI):
         logger.info("Visitor state saved successfully")
     except Exception as e:
         logger.error(f"Error saving visitor state on shutdown: {e}")
+
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
 
     await stream_manager.stop_streaming()
     cctv_handler.stop()
@@ -616,9 +622,7 @@ async def websocket_stream(websocket: WebSocket):
 async def list_faces():
     """Return the last 20 face captures, newest first."""
     records = stream_manager.face_store.get_recent(limit=20)
-    for r in records:
-        r["url"] = f"/faces/{r['filename']}"
-    return records
+    return [{**r, "url": f"/faces/{r['filename']}"} for r in records]
 
 
 @app.get("/faces/{filename}", dependencies=[Depends(require_auth)])
