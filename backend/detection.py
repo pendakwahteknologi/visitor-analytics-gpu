@@ -10,7 +10,7 @@ import uuid
 from collections import deque, Counter
 from statistics import median
 
-from config import YOLO_MODEL, CONFIDENCE_THRESHOLD
+from config import YOLO_MODEL, CONFIDENCE_THRESHOLD, BODY_GENDER_CONFIDENCE
 
 try:
     from .visitor_state import VisitorStatePersistence

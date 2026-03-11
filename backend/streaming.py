@@ -7,7 +7,7 @@ import os
 from typing import Set, Dict, Any
 from fastapi import WebSocket, WebSocketDisconnect
 
-from config import JPEG_QUALITY, STREAM_FPS
+from config import JPEG_QUALITY, STREAM_FPS, MIN_PERSON_W, MIN_PERSON_H
 from face_capture_store import FaceCaptureStore
 from person_capture_store import PersonCaptureStore
 

@@ -31,6 +31,13 @@ YOLO_MODEL = os.getenv("YOLO_MODEL", "yolov8n.pt")
 STREAM_FPS = int(os.getenv("STREAM_FPS", "15"))
 JPEG_QUALITY = int(os.getenv("JPEG_QUALITY", "80"))
 
+# Person detection size filter
+MIN_PERSON_W: int = int(os.getenv("MIN_PERSON_W", "50"))
+MIN_PERSON_H: int = int(os.getenv("MIN_PERSON_H", "100"))
+
+# Body gender classifier confidence threshold
+BODY_GENDER_CONFIDENCE: float = float(os.getenv("BODY_GENDER_CONFIDENCE", "0.70"))
+
 # Server settings
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))

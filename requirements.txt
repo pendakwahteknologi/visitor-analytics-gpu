@@ -12,6 +12,7 @@ cryptography~=44.0.0
 python-multipart~=0.0.22
 reportlab~=4.4
 torchreid
+transformers>=4.35
 
 # Test dependencies
 pytest~=8.3.0
