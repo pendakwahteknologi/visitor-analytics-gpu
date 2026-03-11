@@ -131,6 +131,7 @@ class StreamManager:
                 "Unknown": 0
             }
         }
+        self.prev_track_ids: set = set()
 
     async def start_streaming(self):
         """Start the streaming loop."""
@@ -180,7 +181,6 @@ class StreamManager:
         fps_counter = 0
         fps_timer = time.time()
         frame_counter = 0
-        detection_interval = 2  # Run person detection every 2 frames (yolov8x+imgsz1280 is heavy)
         analysis_interval = 4  # Run face analysis every 4 frames
         last_detections = []
         last_stats = {
@@ -209,184 +209,197 @@ class StreamManager:
                 else:
                     resized_frame = frame
 
-                # Run detection with optimized intervals
-                is_detection_frame = frame_counter % detection_interval == 0
                 is_analysis_frame = frame_counter % analysis_interval == 0
 
-                if is_detection_frame:
-                    # Run person detection
-                    detections = self.detection_engine.person_detector.detect(resized_frame)
+                # ByteTrack: called every frame for consistent tracker state
+                detections = self.detection_engine.person_detector.track(resized_frame)
 
-                    # Carry forward gender/age from previous detections by nearest bbox centre
-                    if self.detection_engine.enable_gender and last_detections:
-                        def _centre(bbox):
-                            x1, y1, x2, y2 = bbox
-                            return ((x1 + x2) / 2, (y1 + y2) / 2)
+                # Drop detections too small to be a real person (avoids count inflation)
+                detections = [
+                    det for det in detections
+                    if (det.bbox[2] - det.bbox[0]) >= MIN_PERSON_W
+                    and (det.bbox[3] - det.bbox[1]) >= MIN_PERSON_H
+                ]
 
-                        for det in detections:
-                            cx, cy = _centre(det.bbox)
-                            best = min(
-                                last_detections,
-                                key=lambda d: ((_centre(d.bbox)[0] - cx) ** 2 + (_centre(d.bbox)[1] - cy) ** 2)
-                            )
-                            bx, by = _centre(best.bbox)
-                            # Only inherit if the previous detection was close (within 150px)
-                            if ((bx - cx) ** 2 + (by - cy) ** 2) ** 0.5 < 150:
-                                det.gender = best.gender
-                                det.gender_confidence = best.gender_confidence
-                                det.age = best.age
-                                det.age_group = best.age_group
-                                det.embedding = best.embedding
-                                det.visitor_id = best.visitor_id
+                # Carry forward gender/age from previous detection by nearest bbox centre
+                if self.detection_engine.enable_gender and last_detections:
+                    def _centre(bbox):
+                        x1, y1, x2, y2 = bbox
+                        return ((x1 + x2) / 2, (y1 + y2) / 2)
 
-                    last_detections = detections
+                    for det in detections:
+                        cx, cy = _centre(det.bbox)
+                        best = min(
+                            last_detections,
+                            key=lambda d: ((_centre(d.bbox)[0] - cx) ** 2 + (_centre(d.bbox)[1] - cy) ** 2)
+                        )
+                        bx, by = _centre(best.bbox)
+                        if ((bx - cx) ** 2 + (by - cy) ** 2) ** 0.5 < 150:
+                            det.gender = best.gender
+                            det.gender_confidence = best.gender_confidence
+                            det.age = best.age
+                            det.age_group = best.age_group
+                            det.embedding = best.embedding
+                            det.visitor_id = best.visitor_id
 
-                    # Initialize age group stats for current frame
-                    age_groups = {"Children": 0, "Teens": 0, "Young Adults": 0, "Adults": 0, "Seniors": 0, "Unknown": 0}
+                last_detections = detections
 
-                    # Only run face analysis on fresh detection frames
-                    if self.detection_engine.enable_gender and is_analysis_frame:
-                        loop = asyncio.get_event_loop()
-                        raw_results = await asyncio.gather(*[
-                            loop.run_in_executor(None, self.detection_engine.face_analyzer.analyze, resized_frame, det.bbox)
-                            for det in detections
-                        ], return_exceptions=True)
-                        analyses = [
-                            r if not isinstance(r, Exception) else {"gender": None, "gender_confidence": 0.0, "age": None, "age_group": "Unknown", "embedding": None}
-                            for r in raw_results
-                        ]
-                        for det, analysis in zip(detections, analyses):
-                            det.gender = analysis["gender"]
-                            det.gender_confidence = analysis["gender_confidence"]
-                            det.age = analysis["age"]
-                            det.age_group = analysis["age_group"]
-                            det.embedding = analysis["embedding"]
+                # Build set of current track IDs (only from detections that passed the filter)
+                current_track_ids = {det.track_id for det in detections if det.track_id is not None}
 
-                            # Save face crop when gender is known
-                            if analysis.get("gender") and analysis["gender"] != "Unknown":
-                                try:
-                                    has_embedding = analysis.get("embedding") is not None
-                                    face_record = self.face_store.save_capture(
-                                        resized_frame,
-                                        det.bbox,
-                                        analysis,
-                                        visitor_id=getattr(det, "visitor_id", None) if has_embedding else None,
-                                        is_new_visitor=getattr(det, "is_new_visitor", False) if has_embedding else False,
-                                    )
-                                    if face_record:
-                                        await self._broadcast_face_capture(face_record)
-                                except Exception as e:
-                                    logger.error(f"Face capture error: {e}")
+                # Detections not yet confirmed — need full analysis
+                confirmed_map = self.detection_engine.body_tracker.track_to_person
+                detections_needing_analysis = [
+                    det for det in detections
+                    if det.track_id is None or det.track_id not in confirmed_map
+                ]
 
-                            # Count age groups for current frame display
-                            if det.age_group and det.age_group != "Unknown":
-                                age_groups[det.age_group] += 1
-                            else:
-                                age_groups["Unknown"] += 1
+                # Always initialise age_groups for stats
+                age_groups = {
+                    "Children": 0, "Teens": 0, "Young Adults": 0,
+                    "Adults": 0, "Seniors": 0, "Unknown": 0
+                }
 
-                    # --- Body Re-ID (independent of gender analysis) ---
-                    if is_analysis_frame:
-                        loop = asyncio.get_event_loop()
-                        # Build per-detection gender/age from analyses if available
-                        if self.detection_engine.enable_gender and 'analyses' in locals():
-                            det_analyses = analyses
+                # Face analysis (heavy — only on analysis frames, only when gender enabled)
+                analyses = [{}] * len(detections_needing_analysis)
+                if self.detection_engine.enable_gender and is_analysis_frame:
+                    loop = asyncio.get_event_loop()
+                    raw_results = await asyncio.gather(*[
+                        loop.run_in_executor(
+                            None, self.detection_engine.face_analyzer.analyze,
+                            resized_frame, det.bbox
+                        )
+                        for det in detections_needing_analysis
+                    ], return_exceptions=True)
+                    analyses = [
+                        r if not isinstance(r, Exception)
+                        else {"gender": None, "gender_confidence": 0.0,
+                              "age": None, "age_group": "Unknown", "embedding": None}
+                        for r in raw_results
+                    ]
+                    for det, analysis in zip(detections_needing_analysis, analyses):
+                        det.gender = analysis["gender"]
+                        det.gender_confidence = analysis["gender_confidence"]
+                        det.age = analysis["age"]
+                        det.age_group = analysis["age_group"]
+                        det.embedding = analysis["embedding"]
+
+                        # Save face crop when gender is known
+                        if analysis.get("gender") and analysis["gender"] != "Unknown":
+                            try:
+                                has_embedding = analysis.get("embedding") is not None
+                                face_record = self.face_store.save_capture(
+                                    resized_frame, det.bbox, analysis,
+                                    visitor_id=getattr(det, "visitor_id", None) if has_embedding else None,
+                                    is_new_visitor=getattr(det, "is_new_visitor", False) if has_embedding else False,
+                                )
+                                if face_record:
+                                    await self._broadcast_face_capture(face_record)
+                            except Exception as e:
+                                logger.error("Face capture error: %s", e)
+
+                        if det.age_group and det.age_group != "Unknown":
+                            age_groups[det.age_group] += 1
                         else:
-                            det_analyses = [{}] * len(detections)
+                            age_groups["Unknown"] += 1
 
-                        # Extract body embeddings in parallel (non-blocking)
-                        body_embeddings = await asyncio.gather(*[
-                            loop.run_in_executor(
-                                None,
-                                self.detection_engine.osnet.extract,
-                                resized_frame,
-                                det.bbox,
-                            )
-                            for det in detections
-                        ], return_exceptions=True)
+                # Body Re-ID (on analysis frames, only for detections needing analysis)
+                if is_analysis_frame:
+                    loop = asyncio.get_event_loop()
+                    body_embeddings = await asyncio.gather(*[
+                        loop.run_in_executor(
+                            None, self.detection_engine.osnet.extract,
+                            resized_frame, det.bbox,
+                        )
+                        for det in detections_needing_analysis
+                    ], return_exceptions=True)
 
-                        for det, body_emb, analysis in zip(detections, body_embeddings, det_analyses):
-                            if isinstance(body_emb, Exception):
-                                body_emb = None
-                            gender = analysis.get("gender") if analysis else None
-                            age = analysis.get("age") if analysis else None
-                            age_group = analysis.get("age_group") if analysis else None
+                    for det, body_emb, analysis in zip(detections_needing_analysis, body_embeddings, analyses):
+                        if isinstance(body_emb, Exception):
+                            body_emb = None
 
-                            # Skip Re-ID for crops that are too small for OSNet when
-                            # OSNet is available — avoids inflating count via _count_only.
-                            if body_emb is None and self.detection_engine.osnet.available:
-                                continue
+                        # Skip crops too small for OSNet (avoids _count_only inflation)
+                        if body_emb is None and self.detection_engine.osnet.available:
+                            continue
 
-                            is_new, person_id = self.detection_engine.body_tracker.check_person(
-                                body_emb,
-                                gender=gender,
-                                age=age,
-                                age_group=age_group,
-                            )
+                        gender    = analysis.get("gender") if analysis else None
+                        age       = analysis.get("age") if analysis else None
+                        age_group = analysis.get("age_group") if analysis else None
 
-                            if person_id is not None:
-                                det.visitor_id = person_id
-                                det.is_new_visitor = is_new
+                        # Body-gender fallback (only when enable_gender=True and face didn't classify)
+                        if self.detection_engine.enable_gender and (gender is None or gender == "Unknown") and body_emb is not None:
+                            x1, y1, x2, y2 = det.bbox
+                            crop = resized_frame[y1:y2, x1:x2]
+                            if crop.size > 0:
+                                gender = self.detection_engine.body_gender.predict(crop)
 
-                            if is_new and person_id is not None:
-                                try:
-                                    person_record = self.person_store.save_capture(
-                                        resized_frame, det.bbox,
-                                        person_id=person_id,
-                                        gender=gender,
-                                        age=age,
-                                        age_group=age_group,
-                                        is_new=True,
-                                    )
-                                    if person_record:
-                                        await self._broadcast_person_capture(person_record)
-                                except Exception as e:
-                                    logger.error("Person capture error: %s", e)
+                        is_new, person_id = self.detection_engine.body_tracker.check_person(
+                            body_emb,
+                            track_id=det.track_id,
+                            gender=gender,
+                            age=age,
+                            age_group=age_group,
+                        )
 
-                            elif not is_new and person_id is not None:
-                                if gender and gender != "Unknown":
-                                    self.detection_engine.body_tracker.attach_gender(
-                                        person_id, gender, age, age_group
-                                    )
-                                try:
-                                    person_record = self.person_store.save_capture(
-                                        resized_frame, det.bbox,
-                                        person_id=person_id,
-                                        gender=gender,
-                                        age=age,
-                                        age_group=age_group,
-                                        is_new=False,
-                                    )
-                                    if person_record:
-                                        await self._broadcast_person_capture(person_record)
-                                except Exception as e:
-                                    logger.error("Person capture refresh error: %s", e)
+                        if person_id is not None:
+                            det.visitor_id = person_id
+                            det.is_new_visitor = is_new
 
-                    # Calculate stats for current frame display
-                    stats = {
-                        "total_people": len(detections),
-                        "male": sum(1 for d in detections if d.gender == "Male"),
-                        "female": sum(1 for d in detections if d.gender == "Female"),
-                        "unknown": sum(1 for d in detections if d.gender == "Unknown" or d.gender is None),
-                        "age_groups": age_groups
-                    }
-                    last_stats = stats
+                        if is_new and person_id is not None:
+                            try:
+                                person_record = self.person_store.save_capture(
+                                    resized_frame, det.bbox,
+                                    person_id=person_id,
+                                    gender=gender, age=age, age_group=age_group,
+                                    is_new=True,
+                                )
+                                if person_record:
+                                    await self._broadcast_person_capture(person_record)
+                            except Exception as e:
+                                logger.error("Person capture error: %s", e)
 
-                    # Update current stats (for live display)
-                    self.current_stats["total_people"] = stats["total_people"]
-                    self.current_stats["male"] = stats["male"]
-                    self.current_stats["female"] = stats["female"]
-                    self.current_stats["unknown"] = stats["unknown"]
-                    self.current_stats["age_groups"] = stats["age_groups"]
+                        elif not is_new and person_id is not None:
+                            if gender and gender != "Unknown":
+                                self.detection_engine.body_tracker.attach_gender(
+                                    person_id, gender, age, age_group
+                                )
+                            try:
+                                person_record = self.person_store.save_capture(
+                                    resized_frame, det.bbox,
+                                    person_id=person_id,
+                                    gender=gender, age=age, age_group=age_group,
+                                    is_new=False,
+                                )
+                                if person_record:
+                                    await self._broadcast_person_capture(person_record)
+                            except Exception as e:
+                                logger.error("Person capture refresh error: %s", e)
 
-                    # Draw detections
-                    annotated_frame = self.detection_engine.person_detector.draw_detections(
-                        resized_frame, detections
-                    )
-                else:
-                    # Reuse last detection results for intermediate frames
-                    annotated_frame = self.detection_engine.person_detector.draw_detections(
-                        resized_frame, last_detections
-                    )
+                # Evict ByteTrack IDs that disappeared this frame
+                for gone_id in (self.prev_track_ids - current_track_ids):
+                    self.detection_engine.body_tracker.clear_track(gone_id)
+                self.prev_track_ids = current_track_ids
+
+                # Live stats for display
+                stats = {
+                    "total_people": len(detections),
+                    "male": sum(1 for d in detections if d.gender == "Male"),
+                    "female": sum(1 for d in detections if d.gender == "Female"),
+                    "unknown": sum(1 for d in detections if d.gender == "Unknown" or d.gender is None),
+                    "age_groups": age_groups,
+                }
+                last_stats = stats
+
+                self.current_stats["total_people"] = stats["total_people"]
+                self.current_stats["male"] = stats["male"]
+                self.current_stats["female"] = stats["female"]
+                self.current_stats["unknown"] = stats["unknown"]
+                self.current_stats["age_groups"] = stats["age_groups"]
+
+                # Annotate and broadcast frame
+                annotated_frame = self.detection_engine.person_detector.draw_detections(
+                    resized_frame, detections
+                )
 
                 # Only broadcast frames if CCTV is connected
                 if self.cctv_handler.connection_state == "connected":

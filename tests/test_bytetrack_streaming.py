@@ -139,3 +139,96 @@ class TestBodyGenderEnableGate:
 
         assert not called
         assert gender is None
+
+
+# ---------------------------------------------------------------------------
+# Integration: no count inflation from tiny crops
+# ---------------------------------------------------------------------------
+
+class TestNoInflation:
+    def test_tiny_bbox_detections_never_increment_visitor_count(self):
+        """Tiny bboxes (below MIN_PERSON_W x MIN_PERSON_H) must not increment visitor stats."""
+        from config import MIN_PERSON_W, MIN_PERSON_H
+        from detection import Detection
+
+        tiny_bboxes = [
+            (280, 369, 301, 405),   # 21x36 — real offending bbox from bug report
+            (0, 0, 30, 50),         # 30x50 — also below threshold
+        ]
+
+        for bbox in tiny_bboxes:
+            det = Detection(bbox=bbox, confidence=0.6, track_id=1)
+            x1, y1, x2, y2 = det.bbox
+            w, h = x2 - x1, y2 - y1
+            filtered_out = (w < MIN_PERSON_W or h < MIN_PERSON_H)
+            assert filtered_out, f"bbox {bbox} ({w}x{h}) should be filtered but was not"
+
+    def test_large_bbox_is_not_filtered(self):
+        """A person-sized bbox (80x180) must pass through the filter."""
+        from config import MIN_PERSON_W, MIN_PERSON_H
+        from detection import Detection
+
+        det = Detection(bbox=(100, 50, 180, 230), confidence=0.7, track_id=2)
+        x1, y1, x2, y2 = det.bbox
+        w, h = x2 - x1, y2 - y1
+        filtered_out = (w < MIN_PERSON_W or h < MIN_PERSON_H)
+        assert not filtered_out
+
+
+class TestTrackIdFlowIntegration:
+    def test_track_id_confirmation_and_fast_path(self):
+        """Same track_id seen 3 times → confirmed; 4th call uses fast path."""
+        from detection import BodyReIDTracker
+        from unittest.mock import patch
+
+        with patch("detection.VisitorStatePersistence") as MockP:
+            mock = MockP.return_value
+            mock.restore_state.return_value = (
+                {}, {},
+                {"total_visitors": 0, "male": 0, "female": 0, "unknown": 0,
+                 "age_groups": {"Children": 0, "Teens": 0, "Young Adults": 0,
+                                "Adults": 0, "Seniors": 0, "Unknown": 0}},
+                1,
+            )
+            mock.save_state.return_value = None
+            tracker = BodyReIDTracker(confirmation_count=3)
+
+        emb = _rand_emb()
+        r1 = tracker.check_person(_similar_emb(emb), track_id=7)
+        r2 = tracker.check_person(_similar_emb(emb), track_id=7)
+        r3 = tracker.check_person(_similar_emb(emb), track_id=7)
+        assert r3[0] is True
+        person_id = r3[1]
+        assert 7 in tracker.track_to_person
+        assert tracker.track_to_person[7] == person_id
+
+        before_total = tracker.stats["total_visitors"]
+        r4 = tracker.check_person(_similar_emb(emb), track_id=7)
+        assert r4 == (False, person_id)
+        assert tracker.stats["total_visitors"] == before_total
+
+    def test_track_eviction_via_clear_track(self):
+        """clear_track removes from both maps."""
+        from detection import BodyReIDTracker
+        from unittest.mock import patch
+
+        with patch("detection.VisitorStatePersistence") as MockP:
+            mock = MockP.return_value
+            mock.restore_state.return_value = (
+                {}, {},
+                {"total_visitors": 0, "male": 0, "female": 0, "unknown": 0,
+                 "age_groups": {"Children": 0, "Teens": 0, "Young Adults": 0,
+                                "Adults": 0, "Seniors": 0, "Unknown": 0}},
+                1,
+            )
+            mock.save_state.return_value = None
+            tracker = BodyReIDTracker(confirmation_count=3)
+
+        emb = _rand_emb()
+        for _ in range(3):
+            tracker.check_person(_similar_emb(emb), track_id=55)
+
+        assert 55 in tracker.track_to_person
+        tracker.clear_track(55)
+        assert 55 not in tracker.track_to_person
+        assert 55 not in tracker.pending
