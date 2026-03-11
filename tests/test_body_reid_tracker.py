@@ -257,3 +257,82 @@ class TestMemoryEviction:
         # Trigger eviction by calling check_person
         tracker.check_person(_rand_emb())
         assert 1 not in tracker.persons
+
+
+# ---------------------------------------------------------------------------
+# Track-ID fast path
+# ---------------------------------------------------------------------------
+
+class TestTrackIdFastPath:
+    def test_known_track_id_returns_without_confirmation(self, tracker):
+        """If track_id is already in track_to_person, return immediately (no cosine)."""
+        tracker.track_to_person[5] = 42
+        tracker.persons[42] = {
+            "embeddings": [_rand_emb()],
+            "timestamp": 9999999.0, "gender": "Male",
+            "age_obs": [], "age_group": "Adults",
+        }
+        emb = _rand_emb()
+        is_new, pid = tracker.check_person(emb, track_id=5)
+        assert is_new is False
+        assert pid == 42
+        assert tracker.stats["total_visitors"] == 0   # no double-count
+
+    def test_track_id_used_as_pending_key(self, tracker):
+        """When track_id is given, it is used as the pending dict key (int)."""
+        emb = _rand_emb()
+        tracker.check_person(_similar_emb(emb), track_id=77)
+        assert 77 in tracker.pending
+
+    def test_none_track_id_uses_uuid_pending_key(self, tracker):
+        """When track_id=None, pending key is a 32-char hex UUID string."""
+        tracker.pending.clear()
+        emb = _rand_emb()
+        tracker.check_person(_similar_emb(emb), track_id=None)
+        assert len(tracker.pending) == 1
+        key = list(tracker.pending.keys())[0]
+        assert isinstance(key, str) and len(key) == 32
+
+    def test_same_track_id_accumulates_without_cosine_search(self, tracker):
+        """Three calls with same track_id should confirm even with different embeddings."""
+        r1 = tracker.check_person(_rand_emb(), track_id=10)
+        r2 = tracker.check_person(_rand_emb(), track_id=10)
+        r3 = tracker.check_person(_rand_emb(), track_id=10)
+        assert r1 == (False, None)
+        assert r2 == (False, None)
+        confirmed, pid = r3
+        assert confirmed is True
+        assert pid is not None
+
+    def test_track_id_stored_on_confirmation(self, tracker):
+        """After confirmation, track_to_person[track_id] == person_id."""
+        emb_base = _rand_emb()
+        final_pid = None
+        for _ in range(3):
+            _, pid = tracker.check_person(_similar_emb(emb_base), track_id=99)
+            if pid:
+                final_pid = pid
+        assert tracker.track_to_person[99] == final_pid
+
+
+class TestClearTrack:
+    def test_clear_track_removes_from_track_to_person(self, tracker):
+        tracker.track_to_person[3] = 10
+        tracker.clear_track(3)
+        assert 3 not in tracker.track_to_person
+
+    def test_clear_track_removes_from_pending(self, tracker):
+        emb = _rand_emb()
+        tracker.check_person(_similar_emb(emb), track_id=4)
+        assert 4 in tracker.pending
+        tracker.clear_track(4)
+        assert 4 not in tracker.pending
+
+    def test_clear_track_noop_on_unknown_id(self, tracker):
+        """clear_track on an unknown ID should not raise."""
+        tracker.clear_track(9999)   # must not raise
+
+    def test_reset_clears_track_to_person(self, tracker):
+        tracker.track_to_person[1] = 5
+        tracker.reset()
+        assert tracker.track_to_person == {}

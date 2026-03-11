@@ -914,7 +914,9 @@ class BodyReIDTracker:
         self.MAX_ACTIVE_PERSONS = max_active_persons
 
         self.persons: Dict[int, dict] = {}
-        self.pending: Dict[str, dict] = {}
+        self.pending: Dict = {}
+        self.track_to_person: Dict[int, int] = {}
+        # ByteTrack track_id → confirmed person_id. In-memory only; rebuilt on restart.
         self.next_person_id: int = 1
         self.stats: Dict = {
             "total_visitors": 0,
@@ -942,6 +944,7 @@ class BodyReIDTracker:
     def check_person(
         self,
         body_embedding: Optional[np.ndarray],
+        track_id: Optional[int] = None,
         gender: Optional[str] = None,
         age: Optional[int] = None,
         age_group: Optional[str] = None,
@@ -953,6 +956,10 @@ class BodyReIDTracker:
             (False, person_id) — known confirmed person seen again
             (False, None)      — still pending or no match yet
         """
+        # Fast path: track already confirmed this session — no cosine needed
+        if track_id is not None and track_id in self.track_to_person:
+            return (False, self.track_to_person[track_id])
+
         now = time.time()
         self._evict_expired(now)
 
@@ -972,6 +979,25 @@ class BodyReIDTracker:
                     self._try_attach_gender_to_record(person_id, person, gender, age, age_group)
                 return (False, person_id)
 
+        # 2a. If same track_id is already in pending, accumulate directly (no cosine search)
+        if track_id is not None and track_id in self.pending:
+            pending = self.pending[track_id]
+            pending["count"] += 1
+            if body_embedding is not None:
+                pending["embeddings"] = self._update_embeddings(
+                    pending["embeddings"], body_embedding
+                )
+            pending["timestamp"] = now
+            if gender and gender != "Unknown":
+                pending.setdefault("gender_obs", []).append(gender)
+            if age is not None:
+                pending.setdefault("age_obs", []).append(age)
+            if pending["count"] >= self.confirmation_count:
+                person_id = self._promote(track_id, pending)
+                self.track_to_person[track_id] = person_id
+                return (True, person_id)
+            return (False, None)
+
         # 2. Match against pending
         for pending_key, pending in list(self.pending.items()):
             score = self._best_score(body_embedding, pending["embeddings"])
@@ -987,11 +1013,14 @@ class BodyReIDTracker:
                     pending.setdefault("age_obs", []).append(age)
                 if pending["count"] >= self.confirmation_count:
                     person_id = self._promote(pending_key, pending)
+                    if track_id is not None:
+                        self.track_to_person[track_id] = person_id
                     return (True, person_id)
                 return (False, None)
 
         # 3. New pending record
-        self.pending[uuid.uuid4().hex] = {
+        pending_key = track_id if track_id is not None else uuid.uuid4().hex
+        self.pending[pending_key] = {
             "embeddings": [body_embedding],
             "count": 1,
             "timestamp": now,
@@ -1013,10 +1042,20 @@ class BodyReIDTracker:
             return
         self._try_attach_gender_to_record(person_id, person, gender, age, age_group)
 
+    def clear_track(self, track_id: int) -> None:
+        """Called when ByteTrack permanently drops a track.
+
+        Removes from the fast-path map and from pending.
+        The confirmed person record in self.persons is NOT removed — they may return.
+        """
+        self.track_to_person.pop(track_id, None)
+        self.pending.pop(track_id, None)
+
     def reset(self) -> None:
         """Clear all state and reset stats to zero."""
         self.persons = {}
         self.pending = {}
+        self.track_to_person = {}
         self.next_person_id = 1
         self.stats = {
             "total_visitors": 0, "male": 0, "female": 0, "unknown": 0,
@@ -1061,7 +1100,7 @@ class BodyReIDTracker:
         except Exception as e:
             logger.warning("BodyReIDTracker state restore failed, starting fresh: %s", e)
 
-    def _promote(self, pending_key: str, pending: dict) -> int:
+    def _promote(self, pending_key, pending: dict) -> int:
         """Promote a pending record to confirmed. Returns new person_id."""
         person_id = self.next_person_id
         self.next_person_id += 1
