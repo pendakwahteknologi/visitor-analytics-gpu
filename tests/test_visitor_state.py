@@ -11,40 +11,38 @@ from visitor_state import (
 )
 
 
-class TestPersistenceRoundTrip:
-    def test_save_and_load(self, tmp_path):
-        persist = VisitorStatePersistence(data_dir=str(tmp_path))
+class TestBodyReIDPersistence:
+    def test_save_and_restore_roundtrip(self, tmp_path):
+        from visitor_state import VisitorStatePersistence
+        import numpy as np
+        persistence = VisitorStatePersistence(data_dir=str(tmp_path))
 
-        visitors = {
-            1: {
-                "embeddings": [np.random.randn(512).astype(np.float32)],
-                "timestamp": 1000.0,
-                "gender": "Male",
-                "age_group": "Adults",
-            }
+        persons = {
+            1: {"embeddings": [np.random.randn(512).astype(np.float32)],
+                "timestamp": 1000.0, "gender": "Male",
+                "age_obs": [30], "age_group": "Adults"}
         }
-        stats = {
-            "total_visitors": 1, "male": 1, "female": 0, "unknown": 0,
-            "age_groups": {
-                "Children": 0, "Teens": 0, "Young Adults": 0,
-                "Adults": 1, "Seniors": 0, "Unknown": 0,
-            },
-        }
+        pending = {}
+        stats = {"total_visitors": 1, "male": 1, "female": 0, "unknown": 0,
+                 "age_groups": {"Children": 0, "Teens": 0, "Young Adults": 0,
+                                "Adults": 1, "Seniors": 0, "Unknown": 0}}
 
-        persist.save_state(visitors, {}, stats, 2, 1)
-        state = persist.load_state()
+        persistence.save_state(persons, pending, stats, next_person_id=2)
+        p2, pe2, s2, nid2 = persistence.restore_state()
 
-        assert state["stats"]["total_visitors"] == 1
-        assert len(state["visitors"]) == 1
-        restored_emb = list(state["visitors"].values())[0]["embeddings"][0]
-        assert isinstance(restored_emb, np.ndarray)
-        assert restored_emb.shape == (512,)
+        assert s2["total_visitors"] == 1
+        assert nid2 == 2
+        assert len(p2) == 1
+        assert 1 in p2
+        assert len(p2[1]["embeddings"]) == 1
 
-    def test_load_missing_file(self, tmp_path):
-        persist = VisitorStatePersistence(data_dir=str(tmp_path))
-        state = persist.load_state()
-        assert state["stats"]["total_visitors"] == 0
-        assert state["next_visitor_id"] == 1
+    def test_restore_missing_file_returns_defaults(self, tmp_path):
+        from visitor_state import VisitorStatePersistence
+        persistence = VisitorStatePersistence(data_dir=str(tmp_path / "nonexistent"))
+        persons, pending, stats, nid = persistence.restore_state()
+        assert persons == {}
+        assert stats["total_visitors"] == 0
+        assert nid == 1
 
 
 class TestEncryption:

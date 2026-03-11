@@ -77,31 +77,68 @@ class VisitorStatePersistence:
 
     def save_state(
         self,
-        visitors: Dict,
-        pending_visitors: Dict,
+        persons: Dict,
+        pending: Dict,
         stats: Dict,
-        next_visitor_id: int,
-        next_pending_id: int
+        next_person_id: int,
     ) -> None:
-        """Save visitor tracking state to disk."""
+        """Save BodyReIDTracker state to disk."""
         try:
             state = {
-                "visitors": self._serialize_visitors(visitors),
-                "pending_visitors": self._serialize_visitors(pending_visitors),
+                "persons": self._serialize_visitors(persons),
+                "pending": self._serialize_visitors(pending),
                 "stats": stats,
-                "next_visitor_id": next_visitor_id,
-                "next_pending_id": next_pending_id
+                "next_person_id": next_person_id,
             }
-
             atomic_write_json(self.state_file, state)
             logger.debug(
-                f"Saved visitor state: {len(visitors)} confirmed, "
-                f"{len(pending_visitors)} pending, "
-                f"{stats['total_visitors']} total visitors"
+                "Saved body tracker state: %d confirmed, %d total",
+                len(persons), stats["total_visitors"],
             )
-
         except Exception as e:
-            logger.error(f"Error saving visitor state: {e}")
+            logger.error("Error saving body tracker state: %s", e)
+
+    def restore_state(self) -> tuple:
+        """Load BodyReIDTracker state from disk.
+
+        Returns:
+            (persons, pending, stats, next_person_id)
+        """
+        default_stats = {
+            "total_visitors": 0, "male": 0, "female": 0, "unknown": 0,
+            "age_groups": {
+                "Children": 0, "Teens": 0, "Young Adults": 0,
+                "Adults": 0, "Seniors": 0, "Unknown": 0,
+            },
+        }
+        try:
+            state = atomic_read_json(self.state_file, default={})
+            if not state or "persons" not in state:
+                return {}, {}, default_stats, 1
+
+            persons = {
+                int(k): v
+                for k, v in self._deserialize_visitors(state.get("persons", {})).items()
+            }
+            pending = {
+                int(k): v
+                for k, v in self._deserialize_visitors(state.get("pending", {})).items()
+            }
+            stats = state.get("stats", default_stats)
+            next_person_id = state.get("next_person_id", 1)
+
+            # Ensure all age_group keys present
+            for key in default_stats["age_groups"]:
+                stats["age_groups"].setdefault(key, 0)
+
+            logger.info(
+                "Restored body tracker: %d confirmed, %d total",
+                len(persons), stats["total_visitors"],
+            )
+            return persons, pending, stats, next_person_id
+        except Exception as e:
+            logger.error("Error restoring body tracker state: %s", e)
+            return {}, {}, default_stats, 1
 
     def load_state(self) -> Dict[str, Any]:
         """Load visitor tracking state from disk."""
