@@ -2,6 +2,7 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'backend'))
 
+import threading
 import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch
@@ -41,6 +42,7 @@ class TestPersonDetectorTrack:
             detector.model = MagicMock()
             detector.model.track.return_value = [mock_result]
             detector.last_detection_time = None
+            detector.model_lock = threading.Lock()
 
             dets = detector.track(np.zeros((480, 640, 3), dtype=np.uint8))
 
@@ -68,6 +70,7 @@ class TestPersonDetectorTrack:
             detector.model = MagicMock()
             detector.model.track.return_value = [mock_result]
             detector.last_detection_time = None
+            detector.model_lock = threading.Lock()
 
             dets = detector.track(np.zeros((480, 640, 3), dtype=np.uint8))
 
@@ -91,6 +94,7 @@ class TestPersonDetectorTrack:
             detector.model = MagicMock()
             detector.model.return_value = [mock_result]
             detector.last_detection_time = None
+            detector.model_lock = threading.Lock()
 
             dets = detector.detect(np.zeros((480, 640, 3), dtype=np.uint8))
 

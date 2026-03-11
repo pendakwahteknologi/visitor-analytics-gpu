@@ -141,7 +141,7 @@ class StreamManager:
 
         # Register callback for CCTV state changes
         self.cctv_handler.add_state_callback(self._on_cctv_state_change)
-        self._event_loop = asyncio.get_event_loop()
+        self._event_loop = asyncio.get_running_loop()
 
         self.streaming = True
         self.stream_task = asyncio.create_task(self._stream_loop())
@@ -150,7 +150,9 @@ class StreamManager:
     def _on_cctv_state_change(self, state: str, message: str):
         """Callback for CCTV connection state changes."""
         try:
-            loop = getattr(self, "_event_loop", None) or asyncio.get_event_loop()
+            loop = getattr(self, "_event_loop", None)
+            if loop is None:
+                return  # not yet started
             if loop.is_running():
                 asyncio.run_coroutine_threadsafe(
                     self.connection_manager.broadcast_status({
@@ -226,8 +228,8 @@ class StreamManager:
 
                 # ByteTrack: called every frame for consistent tracker state
                 # run_in_executor prevents blocking the asyncio event loop
-                loop = asyncio.get_event_loop()
-                detections = await loop.run_in_executor(
+                _loop = asyncio.get_running_loop()
+                detections = await _loop.run_in_executor(
                     None, self.detection_engine.person_detector.track, resized_frame
                 )
 
@@ -280,9 +282,9 @@ class StreamManager:
                 # Face analysis (heavy — only on analysis frames, only when gender enabled)
                 analyses = [{}] * len(detections_needing_analysis)
                 if self.detection_engine.enable_gender and is_analysis_frame:
-                    loop = asyncio.get_event_loop()
+                    _loop = asyncio.get_running_loop()
                     raw_results = await asyncio.gather(*[
-                        loop.run_in_executor(
+                        _loop.run_in_executor(
                             None, self.detection_engine.face_analyzer.analyze,
                             resized_frame, det.bbox
                         )
@@ -322,9 +324,9 @@ class StreamManager:
 
                 # Body Re-ID (on analysis frames, only for detections needing analysis)
                 if is_analysis_frame:
-                    loop = asyncio.get_event_loop()
+                    _loop = asyncio.get_running_loop()
                     body_embeddings = await asyncio.gather(*[
-                        loop.run_in_executor(
+                        _loop.run_in_executor(
                             None, self.detection_engine.osnet.extract,
                             resized_frame, det.bbox,
                         )

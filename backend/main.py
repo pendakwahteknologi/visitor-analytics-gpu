@@ -715,7 +715,7 @@ async def websocket_detect_all(websocket: WebSocket):
 
         # Reuse the already-loaded model — avoids 10s reload and double VRAM usage
         model = detection_engine.person_detector.model
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         COLORS = {}
         def get_color(cls_id):
