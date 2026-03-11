@@ -78,6 +78,11 @@ class CCTVApp {
         this.ageAdults = document.getElementById('age-adults');
         this.ageSeniors = document.getElementById('age-seniors');
 
+        // Person capture elements
+        this.personCapturesBody = document.getElementById('person-captures-body');
+        this.personCapturesEmpty = document.getElementById('person-captures-empty');
+        this.personCaptureCount = document.getElementById('person-capture-count');
+
         // Time elements
         this.currentTime = document.getElementById('current-time');
         this.currentDate = document.getElementById('current-date');
@@ -110,6 +115,7 @@ class CCTVApp {
         this.startClock();
         this.connectWebSocket();
         this.loadFaceCaptures();
+        this.loadPersonCaptures();
     }
 
     initMobileTabs() {
@@ -244,6 +250,8 @@ class CCTVApp {
                     this.handleCCTVStatus(message.data);
                 } else if (message.type === 'face_capture') {
                     this.prependFaceTile(message.data);
+                } else if (message.type === 'person_capture') {
+                    this.prependPersonTile(message.data);
                 }
             } catch (error) {
                 console.error('Error processing WebSocket message:', error);
@@ -531,6 +539,65 @@ class CCTVApp {
             [...captures].reverse().forEach(c => this.prependFaceTile(c, true));
         } catch (e) {
             console.warn('Could not load face captures:', e);
+        }
+    }
+
+    buildPersonTile(capture) {
+        const tile = document.createElement('div');
+        const genderClass = (capture.gender || '').toLowerCase();
+        tile.className = `person-tile ${genderClass}`;
+
+        const img = document.createElement('img');
+        img.className = 'person-tile-img';
+        img.src = capture.url;
+        img.alt = capture.gender || 'Person';
+        img.loading = 'lazy';
+
+        const info = document.createElement('div');
+        info.className = 'person-tile-info';
+
+        const genderEl = document.createElement('div');
+        genderEl.className = 'person-tile-gender';
+        this._setText(genderEl, capture.gender || '?');
+
+        const ageEl = document.createElement('div');
+        ageEl.className = 'person-tile-age';
+        this._setText(ageEl, capture.age ? `${capture.age}y` : '');
+
+        info.appendChild(genderEl);
+        info.appendChild(ageEl);
+        tile.appendChild(img);
+        tile.appendChild(info);
+        return tile;
+    }
+
+    prependPersonTile(capture, silent = false) {
+        const body = document.getElementById('person-captures-body');
+        const empty = document.getElementById('person-captures-empty');
+        if (empty) empty.remove();
+
+        body.insertBefore(this.buildPersonTile(capture), body.firstChild);
+
+        // Rolling window: keep max 20 tiles
+        while (body.children.length > 20) {
+            body.removeChild(body.lastChild);
+        }
+
+        if (!silent) {
+            const counter = document.getElementById('person-capture-count');
+            if (counter) counter.textContent = parseInt(counter.textContent || '0') + 1;
+        }
+    }
+
+    async loadPersonCaptures() {
+        try {
+            const resp = await fetch('/persons', { headers: this._headers() });
+            if (!resp.ok) return;
+            const captures = await resp.json();
+            // API returns newest-first; reverse so prepend builds correct order
+            [...captures].reverse().forEach(c => this.prependPersonTile(c, true));
+        } catch (e) {
+            console.warn('Could not load person captures:', e);
         }
     }
 }
