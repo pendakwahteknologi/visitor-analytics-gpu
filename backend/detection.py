@@ -33,6 +33,7 @@ class Detection:
     embedding: Optional[np.ndarray] = field(default=None, repr=False)
     is_new_visitor: bool = False
     visitor_id: Optional[int] = None
+    track_id: Optional[int] = None   # ByteTrack track ID; None when tracker not used
 
 
 def get_age_group(age: int) -> str:
@@ -109,6 +110,44 @@ class PersonDetector:
             logger.error(f"YOLO inference error: {e}")
         except cv2.error as e:
             logger.error(f"OpenCV error during detection: {e}")
+
+        return detections
+
+    def track(self, frame: np.ndarray) -> List['Detection']:
+        """Run YOLO ByteTrack; return Detections with track_id populated.
+
+        MUST be called on every frame — ByteTrack requires consistent input
+        to maintain internal state. detect() is kept for snapshot/API use.
+        """
+        if self.model is None:
+            logger.error("Model not loaded")
+            return []
+
+        detections = []
+        try:
+            results = self.model.track(
+                frame,
+                persist=True,
+                tracker="bytetrack.yaml",
+                classes=[0],
+                conf=self.confidence,
+                iou=0.45,
+                device=0,
+                half=True,
+                imgsz=1280,
+                verbose=False,
+            )
+            if results and results[0].boxes is not None:
+                for box in results[0].boxes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                    conf = float(box.conf[0])
+                    tid = int(box.id[0]) if box.id is not None else None
+                    detections.append(Detection(bbox=(x1, y1, x2, y2), confidence=conf, track_id=tid))
+            self.last_detection_time = time.time()
+        except (RuntimeError, ValueError) as e:
+            logger.error("YOLO track error: %s", e)
+        except cv2.error as e:
+            logger.error("OpenCV error during tracking: %s", e)
 
         return detections
 
