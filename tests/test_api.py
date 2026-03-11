@@ -249,3 +249,41 @@ class TestLoginFlow:
         r = client.get("/logout", follow_redirects=False)
         assert r.status_code == 302
         assert "/login" in r.headers["location"]
+
+
+# ---------------------------------------------------------------------------
+# Face capture endpoints
+# ---------------------------------------------------------------------------
+
+class TestFaceEndpoints:
+    def test_get_faces_returns_list(self, client):
+        with patch("main.stream_manager") as mock_sm:
+            mock_sm.face_store.get_recent.return_value = []
+            resp = client.get("/faces", headers={"X-API-Key": "test-secret-key"})
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)
+
+    def test_get_faces_requires_auth(self, client):
+        resp = client.get("/faces")
+        assert resp.status_code == 401
+
+    def test_get_faces_includes_url_field(self, client):
+        fake = {
+            "id": "abc123", "filename": "abc123.jpg",
+            "timestamp": 1000.0, "gender": "Male", "age": 28,
+            "age_group": "Young Adults", "visitor_id": 1, "is_new_visitor": False,
+        }
+        with patch("main.stream_manager") as mock_sm:
+            mock_sm.face_store.get_recent.return_value = [fake]
+            resp = client.get("/faces", headers={"X-API-Key": "test-secret-key"})
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["url"] == "/faces/abc123.jpg"
+
+    def test_get_face_image_not_found(self, client):
+        resp = client.get("/faces/nonexistent.jpg", headers={"X-API-Key": "test-secret-key"})
+        assert resp.status_code == 404
+
+    def test_get_face_image_rejects_path_traversal(self, client):
+        resp = client.get("/faces/..%2Fsecret.txt", headers={"X-API-Key": "test-secret-key"})
+        assert resp.status_code in (400, 404)

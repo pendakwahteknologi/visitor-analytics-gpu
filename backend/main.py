@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import signal
 import logging
 import time
@@ -7,6 +8,7 @@ import hmac
 import hashlib
 import secrets
 import threading
+import asyncio
 import json as _json
 from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
@@ -267,6 +269,18 @@ async def lifespan(app: FastAPI):
         logger.info("CCTV monitoring started successfully")
     except Exception as e:
         logger.error(f"Failed to auto-start monitoring: {e}")
+
+    async def _face_cleanup_loop():
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                deleted = stream_manager.face_store.cleanup_expired()
+                if deleted:
+                    logger.info("Face capture cleanup: deleted %d expired files", deleted)
+            except Exception as e:
+                logger.error("Face capture cleanup error: %s", e)
+
+    asyncio.create_task(_face_cleanup_loop())
 
     yield
 
@@ -598,6 +612,29 @@ async def websocket_stream(websocket: WebSocket):
         stream_manager.connection_manager.disconnect(websocket)
 
 
+@app.get("/faces", dependencies=[Depends(require_auth)])
+async def list_faces():
+    """Return the last 20 face captures, newest first."""
+    records = stream_manager.face_store.get_recent(limit=20)
+    for r in records:
+        r["url"] = f"/faces/{r['filename']}"
+    return records
+
+
+@app.get("/faces/{filename}", dependencies=[Depends(require_auth)])
+async def get_face_image(filename: str):
+    """Serve a face capture JPEG."""
+    if not re.fullmatch(r"[a-zA-Z0-9_\-]+\.jpg", filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "backend", "data", "face_captures", filename,
+    )
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(path, media_type="image/jpeg")
+
+
 @app.get("/rootCA.pem", include_in_schema=False)
 async def download_ca():
     """Serve the mkcert root CA certificate for client installation."""
@@ -635,7 +672,6 @@ async def websocket_detect_all(websocket: WebSocket):
     try:
         import base64
         import json as _json_local
-        import asyncio
 
         # Reuse the already-loaded model — avoids 10s reload and double VRAM usage
         model = detection_engine.person_detector.model
