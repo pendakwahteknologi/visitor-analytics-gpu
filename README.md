@@ -2,28 +2,29 @@
 
 Real-time CCTV-based visitor counting system with gender, age, and body Re-ID, fully GPU-accelerated using YOLO + ByteTrack and InsightFace on NVIDIA hardware.
 
-![Version](https://img.shields.io/badge/version-6.0.0-blue)
+![Version](https://img.shields.io/badge/version-6.1.0-blue)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![GPU](https://img.shields.io/badge/GPU-NVIDIA%20CUDA-green)
 ![YOLO](https://img.shields.io/badge/YOLO-Ultralytics-purple)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-117%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-152%20passing-brightgreen)
 
 ---
 
-## What's New in v6.0.0 (ByteTrack Edition)
+## What's New in v6.1.0
 
 | Improvement | Detail |
 |---|---|
+| **Production Hardening** | `asyncio.get_running_loop()` for safe executor dispatch, `model_lock` for serialised YOLO inference |
+| **Non-blocking Tracking** | `person_detector.track()` runs in executor to unblock the async event loop |
+| **Auto-restart Stream** | Stream loop auto-restarts on transient errors instead of dying silently |
+| **CSP Fix** | Detect-all inline script moved to external file to comply with Content-Security-Policy |
 | **ByteTrack** | YOLO built-in tracker replaces frame-to-frame detect(); each person gets a stable `track_id` while in scene |
 | **Body Re-ID (OSNet)** | torchreid OSNet extracts 512-dim body embeddings for cross-session re-identification (same person returns → not re-counted) |
 | **BodyReIDTracker** | Replaces old VisitorTracker; confirmation-based counting (3× detections) eliminates false positives |
 | **Body Gender Fallback** | HuggingFace `rizvandwiki/gender-classification-2` classifies gender from body crop when face is not visible |
 | **Min-Size Filter** | Detections smaller than 50×100 px are dropped — eliminates ghost/background false positives |
-| **No Count Inflation** | Fixed root cause of inflated counts (21×36 px bbox → `_count_only()` every frame) |
-| **Face Captures Panel** | Live tiles showing face snapshots with gender label as visitors are detected |
-| **Person Captures Panel** | Live tiles showing body snapshots at the moment each visitor is confirmed |
-| **PDF Report Redesign** | "Unique Persons" terminology, KPI cards, daily breakdown tables, section dividers |
+| **Face & Person Captures** | Live tiles showing face/body snapshots with gender label as visitors are detected |
 | **State Encryption** | Optional Fernet AES encryption for body embeddings at rest (`EMBEDDING_ENCRYPTION_KEY`) |
 
 ---
@@ -32,11 +33,11 @@ Real-time CCTV-based visitor counting system with gender, age, and body Re-ID, f
 
 - **Real-time Person Detection** — YOLO + ByteTrack at imgsz=1280 with FP16 on GPU
 - **ByteTrack Tracking** — Stable track IDs per person, called every frame for reliable state
-- **Body Re-identification** — OSNet 512-dim embeddings, cosine similarity across sessions
+- **Body Re-identification** — OSNet 512-dim embeddings (CPU), cosine similarity across sessions
 - **Unique Visitor Counting** — Confirmation-based (3× detections required before counting)
 - **Gender & Age Classification** — InsightFace (buffalo_l) + DeepFace ensemble; body-based fallback
 - **Face & Person Capture Panels** — Live dashboard tiles with real-time WebSocket updates
-- **Live Video Stream** — WebSocket-based streaming, JPEG quality configurable
+- **Live Video Stream** — WebSocket-based MJPEG streaming, JPEG quality configurable
 - **Modern Dashboard** — Dark-themed responsive UI, today/weekly/monthly/all-time stats
 - **HTTPS** — mkcert SSL, HTTP→HTTPS redirect, works on any DHCP network
 - **mDNS** — `visitor-analysis.local` resolves automatically on LAN (no DNS config needed)
@@ -44,7 +45,7 @@ Real-time CCTV-based visitor counting system with gender, age, and body Re-ID, f
 - **API Key Auth** — Header-based API key for programmatic access
 - **SQLite Storage** — WAL-mode database with automatic JSON migration
 - **PDF & CSV Reports** — Downloadable reports with historical statistics and unique person counts
-- **Crash Resilience** — Atomic file writes, signal handlers, auto-save every 30 seconds
+- **Crash Resilience** — Atomic file writes, signal handlers, auto-save every 30 seconds, auto-restart stream loop
 - **Security Hardened** — CSP headers, rate limiting, timing-attack-safe comparisons, thread-safe ID generation
 - **Audit Logging** — Every request logged with IP, method, path, status, duration, and auth method
 
@@ -54,7 +55,7 @@ Real-time CCTV-based visitor counting system with gender, age, and body Re-ID, f
 
 ```
 ┌─────────────────┐
-│   CCTV Camera   │  RTSP Stream
+│   CCTV Camera   │  RTSP Stream (TCP)
 └────────┬────────┘
          │
          ▼
@@ -68,7 +69,7 @@ Real-time CCTV-based visitor counting system with gender, age, and body Re-ID, f
 │  ├─ BodyReIDTracker (confirmation + Re-ID)   │
 │  ├─ SQLite WAL (Statistics)                  │
 │  ├─ WebSocket Streaming                      │
-│  └─ HTTPS (mkcert, port 443)                 │
+│  └─ HTTPS (mkcert)                           │
 └────────┬─────────────────────────────────────┘
          │
          ▼
@@ -110,7 +111,7 @@ Real-time CCTV-based visitor counting system with gender, age, and body Re-ID, f
 |---|---|
 | Backend | Python 3.12, FastAPI, Uvicorn |
 | Object Detection | Ultralytics YOLO + ByteTrack, FP16, GPU |
-| Body Re-ID | torchreid OSNet (512-dim embeddings) |
+| Body Re-ID | torchreid OSNet (512-dim embeddings, CPU) |
 | Face Analysis | InsightFace buffalo_l (CUDA), DeepFace |
 | Body Gender | HuggingFace transformers (`rizvandwiki/gender-classification-2`) |
 | ONNX Runtime | onnxruntime-gpu (CUDAExecutionProvider) |
@@ -120,7 +121,7 @@ Real-time CCTV-based visitor counting system with gender, age, and body Re-ID, f
 | Frontend | HTML5, CSS3, Vanilla JavaScript |
 | HTTPS | mkcert (locally trusted CA) |
 | mDNS | Avahi daemon (`visitor-analysis.local`) |
-| Testing | pytest, httpx, websockets, pytest-asyncio (117 tests) |
+| Testing | pytest, httpx, websockets, pytest-asyncio (152 tests) |
 
 ---
 
@@ -129,30 +130,35 @@ Real-time CCTV-based visitor counting system with gender, age, and body Re-ID, f
 ```
 visitor-analytics/
 ├── backend/
-│   ├── main.py              # FastAPI app, middleware, auth, endpoints
-│   ├── config.py            # Configuration from environment
-│   ├── cctv_handler.py      # CCTV camera connection (RTSP)
-│   ├── detection.py         # YOLO, PersonDetector.track(), OSNet, InsightFace,
-│   │                        # BodyGenderAnalyzer, BodyReIDTracker, DetectionEngine
-│   ├── streaming.py         # WebSocket video streaming (ByteTrack loop)
-│   ├── data_storage.py      # SQLite statistics persistence
-│   ├── pdf_report.py        # PDF report generation (ReportLab)
-│   ├── visitor_state.py     # Visitor state persistence + encryption
-│   └── atomic_write.py      # Safe file writing utilities
+│   ├── main.py                # FastAPI app, middleware, auth, endpoints
+│   ├── config.py              # Configuration from environment
+│   ├── cctv_handler.py        # CCTV camera connection (RTSP, auto-reconnect)
+│   ├── detection.py           # YOLO, PersonDetector.track(), OSNet, InsightFace,
+│   │                          # BodyGenderAnalyzer, BodyReIDTracker, DetectionEngine
+│   ├── streaming.py           # WebSocket video streaming (ByteTrack loop)
+│   ├── data_storage.py        # SQLite statistics persistence
+│   ├── pdf_report.py          # PDF report generation (ReportLab)
+│   ├── visitor_state.py       # Visitor state persistence + encryption
+│   ├── person_capture_store.py # Body crop JPEG storage + index
+│   ├── face_capture_store.py  # Face crop JPEG storage + index
+│   └── atomic_write.py        # Safe file writing utilities
 ├── frontend/
-│   ├── index.html           # Dashboard UI (face + person capture panels)
-│   ├── login.html           # Login page
-│   └── detect-all.html      # YOLO all-classes explorer
+│   ├── index.html             # Dashboard UI (face + person capture panels)
+│   ├── login.html             # Login page
+│   └── detect-all.html        # YOLO all-classes explorer
 ├── static/
-│   ├── css/style.css        # Dark theme styling
-│   └── js/app.js            # Dashboard logic, WebSocket, capture tiles
-├── certs/                   # SSL certificates (mkcert, not committed)
-├── tests/                   # 117 automated tests
-├── docs/
-│   └── superpowers/         # Design specs and implementation plans
-├── .env.example             # Environment variable template
-├── requirements.txt         # Python dependencies
-└── run.sh                   # Dev startup script
+│   ├── css/style.css          # Dark theme styling
+│   └── js/
+│       ├── app.js             # Dashboard logic, WebSocket, capture tiles
+│       └── detect-all.js      # Detect-all page logic
+├── systemd/
+│   ├── visitor-analytics.service  # Main app systemd unit
+│   └── http-redirect.service      # HTTP→HTTPS redirect unit
+├── certs/                     # SSL certificates (mkcert, not committed)
+├── tests/                     # 152 automated tests (14 test files)
+├── .env.example               # Environment variable template
+├── requirements.txt           # Python dependencies
+└── run.sh                     # Dev startup script
 ```
 
 ---
@@ -217,8 +223,8 @@ sudo systemctl enable --now avahi-daemon
 ### 6. Run
 
 ```bash
-# HTTPS on port 443
-uvicorn backend/main:app --host 0.0.0.0 --port 443 \
+# Development (HTTPS on port 443)
+uvicorn backend.main:app --host 0.0.0.0 --port 443 \
   --ssl-certfile certs/cert.pem --ssl-keyfile certs/key.pem
 ```
 
@@ -264,6 +270,7 @@ Works on any DHCP network — `visitor-analysis.local` resolves via mDNS regardl
 |---|---|---|
 | `CONFIDENCE_THRESHOLD` | Person detection confidence (0.1–0.95) | `0.5` |
 | `GENDER_ENABLED` | Enable gender/age detection | `true` |
+| `GENDER_THRESHOLD` | InsightFace gender confidence | `0.6` |
 | `YOLO_MODEL` | YOLO model file | `yolov8n.pt` |
 | `MIN_PERSON_W` | Minimum detection width in pixels | `50` |
 | `MIN_PERSON_H` | Minimum detection height in pixels | `100` |
@@ -281,7 +288,7 @@ Works on any DHCP network — `visitor-analysis.local` resolves via mDNS regardl
 | Variable | Description | Default |
 |---|---|---|
 | `HOST` | Bind address | `0.0.0.0` |
-| `PORT` | Server port | `443` |
+| `PORT` | Server port | `8000` |
 | `TZ` | Timezone | `Asia/Kuala_Lumpur` |
 
 ### Authentication
@@ -294,11 +301,20 @@ Works on any DHCP network — `visitor-analysis.local` resolves via mDNS regardl
 | `SESSION_MAX_AGE` | Session expiry in seconds | `86400` |
 | `API_KEY` | API key for programmatic access | — |
 
+### Logging
+
+| Variable | Description | Default |
+|---|---|---|
+| `LOG_FILE` | Application log file path | `logs/visitor-stat.log` |
+| `LOG_MAX_BYTES` | Max log file size before rotation | `10485760` (10 MB) |
+| `LOG_BACKUP_COUNT` | Number of rotated log files to keep | `5` |
+
 ### Security (Optional)
 
 | Variable | Description | Default |
 |---|---|---|
 | `EMBEDDING_ENCRYPTION_KEY` | Fernet key for embedding encryption at rest | — |
+| `CORS_ORIGINS` | Comma-separated allowed CORS origins | — |
 
 ---
 
@@ -315,11 +331,15 @@ Works on any DHCP network — `visitor-analysis.local` resolves via mDNS regardl
 | `/stats/weekly` | GET | Yes | Weekly statistics |
 | `/stats/monthly` | GET | Yes | Monthly statistics |
 | `/stats/all-time` | GET | Yes | All-time statistics |
-| `/stats/export` | GET | Yes | CSV export |
+| `/stats/export` | GET | Yes | JSON export |
 | `/stats/export/pdf` | GET | Yes | PDF report |
 | `/reset-stats` | POST | Yes | Reset today's stats |
-| `/capture/faces` | GET | Yes | Recent face captures |
-| `/capture/persons` | GET | Yes | Recent person captures |
+| `/stream/start` | POST | Yes | Start CCTV capture and detection |
+| `/stream/stop` | POST | Yes | Stop CCTV capture |
+| `/faces` | GET | Yes | Recent face captures |
+| `/faces/{filename}` | GET | Yes | Retrieve face image |
+| `/persons` | GET | Yes | Recent person captures |
+| `/persons/{filename}` | GET | Yes | Retrieve person image |
 | `/detect-all` | GET | — | YOLO all-classes explorer |
 | `/ws/stream` | WebSocket | Yes | Live video feed |
 | `/ws/detect-all` | WebSocket | — | YOLO all-classes stream |
@@ -336,7 +356,7 @@ Works on any DHCP network — `visitor-analysis.local` resolves via mDNS regardl
 | Timing Attacks | `hmac.compare_digest()` for all credential comparisons |
 | Rate Limiting | Thread-safe token bucket (10 req/s, burst 30) per IP |
 | Thread Safety | Locks on visitor ID generation and rate limiter |
-| Async Safety | `return_exceptions=True` on all `asyncio.gather()` calls |
+| Async Safety | `return_exceptions=True` on all `asyncio.gather()` calls, model_lock for YOLO inference |
 | CSP Headers | Content-Security-Policy, X-Frame-Options, X-Content-Type-Options |
 | Private Network | `Access-Control-Allow-Private-Network: true` header |
 | CORS | Configurable allowed origins |
@@ -363,18 +383,27 @@ Works on any DHCP network — `visitor-analysis.local` resolves via mDNS regardl
 ### systemd Services
 
 ```bash
-# Main app
-sudo systemctl status visitor-analytics
+# Copy service files
+sudo cp systemd/visitor-analytics.service /etc/systemd/system/
+sudo cp systemd/http-redirect.service /etc/systemd/system/
+sudo systemctl daemon-reload
 
-# HTTP → HTTPS redirect
+# Enable and start
+sudo systemctl enable --now visitor-analytics
+sudo systemctl enable --now http-redirect
+
+# Check status
+sudo systemctl status visitor-analytics
 sudo systemctl status http-redirect
 
-# mDNS
-sudo systemctl status avahi-daemon
-
-# Restart all
+# Restart
 sudo systemctl restart visitor-analytics http-redirect
 ```
+
+The main service runs with:
+- 180s startup timeout (model loading)
+- Auto-restart on failure (10s delay, max 5 restarts per 5 min)
+- GPU library paths for CUDA/cuBLAS
 
 ### Firewall (UFW)
 
@@ -408,8 +437,9 @@ tail -f logs/visitor-stat.log
 | GPU not used | Verify `nvidia-smi` shows the process; ensure `onnxruntime-gpu` is installed |
 | All gender "Unknown" | Ensure people face camera with adequate lighting, or enable body-gender fallback |
 | Visitor count inflated | Check `MIN_PERSON_W`/`MIN_PERSON_H` in `.env`; increase if small false positives appear |
-| Stats lost after restart | Set `SESSION_SECRET` in `.env` |
+| Stats lost after restart | Set `SESSION_SECRET` in `.env`; state auto-saves every 30s |
 | Body gender model slow first run | First call downloads `rizvandwiki/gender-classification-2` (~14 MB); subsequent calls are instant |
+| Stream dies silently | Check `journalctl -u visitor-analytics -n 100`; stream loop auto-restarts on transient errors |
 
 ---
 

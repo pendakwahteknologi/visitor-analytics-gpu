@@ -1,4 +1,5 @@
 import cv2
+import os
 import re
 import threading
 import time
@@ -58,7 +59,9 @@ class CCTVHandler:
         try:
             self._notify_state_change("connecting", "Connecting to camera...")
 
-            self.cap = cv2.VideoCapture(self.rtsp_url)
+            # Force RTSP over TCP (far more reliable than default UDP)
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;5000000"
+            self.cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
             if not self.cap.isOpened():
@@ -120,13 +123,22 @@ class CCTVHandler:
             # Try to read frame
             ret, frame = self.cap.read()
 
-            if not ret:
-                logger.warning("Failed to read frame from CCTV")
+            if not ret or frame is None:
+                consecutive_failures = getattr(self, '_consecutive_failures', 0) + 1
+                self._consecutive_failures = consecutive_failures
+                if consecutive_failures <= 3:
+                    # Transient glitch — skip frame, don't tear down connection
+                    logger.debug("Frame read failed (%d/3), skipping", consecutive_failures)
+                    time.sleep(0.1)
+                    continue
+                logger.warning("Failed to read frame from CCTV (%d consecutive failures) — reconnecting", consecutive_failures)
+                self._consecutive_failures = 0
                 self.disconnect()
                 reconnect_attempt = 0  # Start fresh reconnection sequence
                 continue
 
             # Successfully read frame
+            self._consecutive_failures = 0
             with self.lock:
                 self.frame = frame
 

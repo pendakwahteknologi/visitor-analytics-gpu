@@ -932,6 +932,8 @@ class BodyReIDTracker:
             },
         }
 
+        self.lock = threading.Lock()  # protects persons, pending, track_to_person, stats
+
         self.state_persistence = VisitorStatePersistence()
         self._restore_state()
         self.last_save_time = time.time()
@@ -959,6 +961,18 @@ class BodyReIDTracker:
             (False, person_id) — known confirmed person seen again
             (False, None)      — still pending or no match yet
         """
+        with self.lock:
+            return self._check_person_unlocked(body_embedding, track_id, gender, age, age_group)
+
+    def _check_person_unlocked(
+        self,
+        body_embedding: Optional[np.ndarray],
+        track_id: Optional[int],
+        gender: Optional[str],
+        age: Optional[int],
+        age_group: Optional[str],
+    ) -> Tuple[bool, Optional[int]]:
+        """Unlocked implementation of check_person (caller holds self.lock)."""
         # Fast path: track already confirmed this session — no cosine needed
         if track_id is not None and track_id in self.track_to_person:
             return (False, self.track_to_person[track_id])
@@ -1040,10 +1054,11 @@ class BodyReIDTracker:
         age_group: Optional[str],
     ) -> None:
         """Attach gender/age to an already-confirmed person."""
-        person = self.persons.get(person_id)
-        if person is None:
-            return
-        self._try_attach_gender_to_record(person_id, person, gender, age, age_group)
+        with self.lock:
+            person = self.persons.get(person_id)
+            if person is None:
+                return
+            self._try_attach_gender_to_record(person_id, person, gender, age, age_group)
 
     def clear_track(self, track_id: int) -> None:
         """Called when ByteTrack permanently drops a track.
@@ -1051,39 +1066,44 @@ class BodyReIDTracker:
         Removes from the fast-path map and from pending.
         The confirmed person record in self.persons is NOT removed — they may return.
         """
-        self.track_to_person.pop(track_id, None)
-        self.pending.pop(track_id, None)
+        with self.lock:
+            self.track_to_person.pop(track_id, None)
+            self.pending.pop(track_id, None)
 
     def reset(self) -> None:
         """Clear all state and reset stats to zero."""
-        self.persons = {}
-        self.pending = {}
-        self.track_to_person = {}
-        self.next_person_id = 1
-        self.stats = {
-            "total_visitors": 0, "male": 0, "female": 0, "unknown": 0,
-            "age_groups": {
-                "Children": 0, "Teens": 0, "Young Adults": 0,
-                "Adults": 0, "Seniors": 0, "Unknown": 0,
-            },
-        }
-        logger.info("BodyReIDTracker reset")
+        with self.lock:
+            self.persons = {}
+            self.pending = {}
+            self.track_to_person = {}
+            self.next_person_id = 1
+            self.stats = {
+                "total_visitors": 0, "male": 0, "female": 0, "unknown": 0,
+                "age_groups": {
+                    "Children": 0, "Teens": 0, "Young Adults": 0,
+                    "Adults": 0, "Seniors": 0, "Unknown": 0,
+                },
+            }
+            logger.info("BodyReIDTracker reset")
 
     def save_state(self) -> None:
         """Persist state to disk."""
-        self.state_persistence.save_state(
-            persons=self.persons,
-            pending=self.pending,
-            stats=self.stats,
-            next_person_id=self.next_person_id,
-        )
-        self.last_save_time = time.time()
+        with self.lock:
+            self.state_persistence.save_state(
+                persons=self.persons,
+                pending=self.pending,
+                stats=self.stats,
+                next_person_id=self.next_person_id,
+            )
+            self.last_save_time = time.time()
 
     def get_stats(self) -> dict:
-        return self.stats.copy()
+        with self.lock:
+            return self.stats.copy()
 
     def get_active_person_count(self) -> int:
-        return len(self.persons)
+        with self.lock:
+            return len(self.persons)
 
     # ------------------------------------------------------------------
     # Private helpers

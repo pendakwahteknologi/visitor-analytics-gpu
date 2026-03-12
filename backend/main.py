@@ -10,6 +10,7 @@ import hashlib
 import secrets
 import threading
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json as _json
 from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
@@ -727,6 +728,8 @@ async def websocket_detect_all(websocket: WebSocket):
             return COLORS[cls_id]
 
         model_lock = detection_engine.person_detector.model_lock
+        # Bounded executor: at most 1 inference at a time per detect-all client
+        _executor = ThreadPoolExecutor(max_workers=1)
 
         def process_frame(frame):
             with model_lock:
@@ -771,7 +774,7 @@ async def websocket_detect_all(websocket: WebSocket):
                 await asyncio.sleep(0.04)
                 continue
 
-            b64, detections = await loop.run_in_executor(None, process_frame, frame)
+            b64, detections = await loop.run_in_executor(_executor, process_frame, frame)
             msg = _json_local.dumps({"type": "frame", "data": b64, "detections": detections})
             try:
                 await websocket.send_text(msg)
@@ -785,6 +788,7 @@ async def websocket_detect_all(websocket: WebSocket):
     finally:
         if ping_task and not ping_task.done():
             ping_task.cancel()
+        _executor.shutdown(wait=False)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import os
+import threading
 from typing import Set, Dict, Any
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -131,6 +132,7 @@ class StreamManager:
                 "Unknown": 0
             }
         }
+        self._stats_lock = threading.Lock()  # protects current_stats and prev_track_ids
         self.prev_track_ids: set = set()
 
     async def start_streaming(self):
@@ -178,20 +180,25 @@ class StreamManager:
 
     async def _stream_loop(self):
         """Main streaming loop with optimized detection and visitor tracking."""
-        import time
+        backoff = 1.0
+        max_backoff = 30.0
 
         while self.streaming:
             try:
                 await self._stream_loop_inner()
+                backoff = 1.0  # reset on clean exit
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error("Stream loop crashed — restarting in 1s: %s", e, exc_info=True)
-                await asyncio.sleep(1)
+                logger.error("Stream loop crashed — restarting in %.1fs: %s", backoff, e, exc_info=True)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
 
     async def _stream_loop_inner(self):
         """Inner streaming loop — restarted automatically on any unhandled exception."""
         import time
+
+        _loop = asyncio.get_running_loop()  # cache once per loop lifetime
 
         fps_counter = 0
         fps_timer = time.time()
@@ -228,7 +235,6 @@ class StreamManager:
 
                 # ByteTrack: called every frame for consistent tracker state
                 # run_in_executor prevents blocking the asyncio event loop
-                _loop = asyncio.get_running_loop()
                 detections = await _loop.run_in_executor(
                     None, self.detection_engine.person_detector.track, resized_frame
                 )
@@ -266,12 +272,24 @@ class StreamManager:
                 # Build set of current track IDs (only from detections that passed the filter)
                 current_track_ids = {det.track_id for det in detections if det.track_id is not None}
 
-                # Detections not yet confirmed — need full analysis
+                # Split detections: unconfirmed need Re-ID, confirmed may still need gender
                 confirmed_map = self.detection_engine.body_tracker.track_to_person
                 detections_needing_analysis = [
                     det for det in detections
                     if det.track_id is None or det.track_id not in confirmed_map
                 ]
+
+                # Confirmed tracks that still have Unknown gender — need face/body gender analysis
+                detections_needing_gender = []
+                if self.detection_engine.enable_gender and is_analysis_frame:
+                    body_tracker = self.detection_engine.body_tracker
+                    for det in detections:
+                        if det.track_id is not None and det.track_id in confirmed_map:
+                            pid = confirmed_map[det.track_id]
+                            with body_tracker.lock:
+                                person = body_tracker.persons.get(pid)
+                                if person and person.get("gender") in (None, "Unknown"):
+                                    detections_needing_gender.append((det, pid))
 
                 # Always initialise age_groups for stats
                 age_groups = {
@@ -279,23 +297,34 @@ class StreamManager:
                     "Adults": 0, "Seniors": 0, "Unknown": 0
                 }
 
+                # Combine all detections that need face analysis
+                all_face_dets = list(detections_needing_analysis)
+                gender_only_dets = [det for det, _pid in detections_needing_gender]
+                all_face_dets.extend(gender_only_dets)
+
                 # Face analysis (heavy — only on analysis frames, only when gender enabled)
-                analyses = [{}] * len(detections_needing_analysis)
-                if self.detection_engine.enable_gender and is_analysis_frame:
-                    _loop = asyncio.get_running_loop()
+                all_analyses = [{}] * len(all_face_dets)
+                if self.detection_engine.enable_gender and is_analysis_frame and all_face_dets:
                     raw_results = await asyncio.gather(*[
                         _loop.run_in_executor(
                             None, self.detection_engine.face_analyzer.analyze,
                             resized_frame, det.bbox
                         )
-                        for det in detections_needing_analysis
+                        for det in all_face_dets
                     ], return_exceptions=True)
-                    analyses = [
+                    all_analyses = [
                         r if not isinstance(r, Exception)
                         else {"gender": None, "gender_confidence": 0.0,
                               "age": None, "age_group": "Unknown", "embedding": None}
                         for r in raw_results
                     ]
+
+                # Split analyses back: first N are for unconfirmed, rest for gender-only
+                analyses = all_analyses[:len(detections_needing_analysis)]
+                gender_analyses = all_analyses[len(detections_needing_analysis):]
+
+                # Apply face results to unconfirmed detections
+                if self.detection_engine.enable_gender and is_analysis_frame:
                     for det, analysis in zip(detections_needing_analysis, analyses):
                         det.gender = analysis["gender"]
                         det.gender_confidence = analysis["gender_confidence"]
@@ -322,9 +351,27 @@ class StreamManager:
                         else:
                             age_groups["Unknown"] += 1
 
+                # Apply face/body-gender results to confirmed-but-unknown-gender tracks
+                if detections_needing_gender and is_analysis_frame:
+                    for (det, pid), analysis in zip(detections_needing_gender, gender_analyses):
+                        gender = analysis.get("gender") if analysis else None
+                        age = analysis.get("age") if analysis else None
+                        age_group = analysis.get("age_group") if analysis else None
+
+                        # Body-gender fallback for confirmed tracks too
+                        if self.detection_engine.enable_gender and (gender is None or gender == "Unknown"):
+                            x1, y1, x2, y2 = det.bbox
+                            crop = resized_frame[y1:y2, x1:x2]
+                            if crop.size > 0:
+                                gender = self.detection_engine.body_gender.predict(crop)
+
+                        if gender and gender != "Unknown":
+                            self.detection_engine.body_tracker.attach_gender(
+                                pid, gender, age, age_group
+                            )
+
                 # Body Re-ID (on analysis frames, only for detections needing analysis)
                 if is_analysis_frame:
-                    _loop = asyncio.get_running_loop()
                     body_embeddings = await asyncio.gather(*[
                         _loop.run_in_executor(
                             None, self.detection_engine.osnet.extract,
@@ -395,9 +442,11 @@ class StreamManager:
                                 logger.error("Person capture refresh error: %s", e)
 
                 # Evict ByteTrack IDs that disappeared this frame
-                for gone_id in (self.prev_track_ids - current_track_ids):
+                with self._stats_lock:
+                    gone_ids = self.prev_track_ids - current_track_ids
+                    self.prev_track_ids = current_track_ids
+                for gone_id in gone_ids:
                     self.detection_engine.body_tracker.clear_track(gone_id)
-                self.prev_track_ids = current_track_ids
 
                 # Live stats for display
                 stats = {
@@ -405,15 +454,16 @@ class StreamManager:
                     "male": sum(1 for d in detections if d.gender == "Male"),
                     "female": sum(1 for d in detections if d.gender == "Female"),
                     "unknown": sum(1 for d in detections if d.gender == "Unknown" or d.gender is None),
-                    "age_groups": age_groups,
+                    "age_groups": dict(age_groups),  # snapshot to avoid shared ref
                 }
                 last_stats = stats
 
-                self.current_stats["total_people"] = stats["total_people"]
-                self.current_stats["male"] = stats["male"]
-                self.current_stats["female"] = stats["female"]
-                self.current_stats["unknown"] = stats["unknown"]
-                self.current_stats["age_groups"] = stats["age_groups"]
+                with self._stats_lock:
+                    self.current_stats["total_people"] = stats["total_people"]
+                    self.current_stats["male"] = stats["male"]
+                    self.current_stats["female"] = stats["female"]
+                    self.current_stats["unknown"] = stats["unknown"]
+                    self.current_stats["age_groups"] = stats["age_groups"]
 
                 # Annotate and broadcast frame
                 annotated_frame = self.detection_engine.person_detector.draw_detections(
@@ -429,7 +479,8 @@ class StreamManager:
 
             # Calculate FPS
             if time.time() - fps_timer >= 1.0:
-                self.current_stats["fps"] = fps_counter
+                with self._stats_lock:
+                    self.current_stats["fps"] = fps_counter
                 fps_counter = 0
                 fps_timer = time.time()
 
@@ -456,8 +507,17 @@ class StreamManager:
     def get_stats(self) -> dict:
         """Get current frame stats and visitor statistics."""
         visitor_stats = self.detection_engine.get_visitor_stats()
+        with self._stats_lock:
+            current_snapshot = {
+                "total_people": self.current_stats["total_people"],
+                "male": self.current_stats["male"],
+                "female": self.current_stats["female"],
+                "unknown": self.current_stats["unknown"],
+                "fps": self.current_stats["fps"],
+                "age_groups": dict(self.current_stats["age_groups"]),
+            }
         return {
-            "current": self.current_stats.copy(),
+            "current": current_snapshot,
             "session": {
                 "total_detected": visitor_stats["total_visitors"],
                 "male_detected": visitor_stats["male"],
