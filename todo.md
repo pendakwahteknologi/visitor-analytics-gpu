@@ -208,27 +208,73 @@ Nice-to-have features that add value but aren't critical for stability.
 
 ---
 
+## Session Log — 2026-03-13
+
+### Completed this session
+
+#### Bug Fixes
+- **Dashboard hang (critical)** — `BodyGenderAnalyzer.predict()` was blocking the asyncio
+  event loop. Moved both call sites to `run_in_executor`. Dashboard now responds instantly.
+- **Co-presence identity collision** — Two different people in the same frame were being
+  matched as the same person if they had similar body embeddings (similar clothing).
+  Fixed with co-presence exclusion: if the matched confirmed person is already active
+  under a different track_id in the same frame, skip the match.
+
+#### Counter Improvements (v6.2.0)
+- **Unique visitor counter** — counter now increments on Re-ID confirmation only;
+  gender/age never blocks a count
+- **Track-only Re-ID** — persons too small/far for OSNet embedding tracked by track_id,
+  confirmed after 3 sightings, upgraded with real embedding when they walk closer
+- **Real-time counter** — dashboard reads live session count; no more 30s lag
+- **Immediate DB save** — flush to SQLite the moment a new unique person is confirmed
+
+#### Infrastructure
+- **Offline HuggingFace model** — `rizvandwiki/gender-classification-2` pre-downloaded to
+  `models/huggingface/`; `HF_HUB_OFFLINE=1` in `.env` — no internet required at runtime
+- **GitHub updated** — all active code pushed, stale docs and unused files removed
+
+### Pending — Next Session
+
+#### CCTV Switch to Aneka Walk (BLOCKED — network access)
+- `.env` already updated to CAM 1 C1:
+  `rtsp://admin:Nais%sic2024@hgw0ad7mecb.sn.mynetname.net:10516/external/stream1`
+- **Blocked**: port 10516 connection refused from this server's public IP `175.143.105.193`
+- **Action needed**: Aneka Walk network team must whitelist `175.143.105.193` on their
+  router/firewall for ports 10516–10562
+- Once unblocked: service will auto-connect (no code changes needed)
+- 30 cameras total available across 7 switches (see `cctv/CCTV RTSP List for Aneka Walk - Sheet1.pdf`)
+
+#### Verify co-presence fix in production
+- Needs 2 people simultaneously in frame to trigger
+- Watch for log: `"Co-presence: track X resembles person #Y ... treating as new"`
+- If it triggers correctly, both people should be counted within ~2 seconds
+
+---
+
 ## Current System Status
 
-| Component        | Status  | Notes                                    |
-|------------------|---------|------------------------------------------|
-| YOLO detection   | Working | yolo26x.pt on GPU, 8-10 FPS              |
-| InsightFace      | Working | buffalo_l, forced to CPU (cuBLAS conflict)|
-| OSNet Re-ID      | Working | CPU, match_threshold=0.60                |
-| Body Re-ID       | Working | confirmation_count=3, memory_duration=1800s|
-| CCTV connection  | Working | RTSP with infinite reconnection + backoff |
-| State persistence| Working | Auto-save every 30s, save on shutdown     |
-| Atomic writes    | Working | fsync + temp file pattern                 |
-| Data storage     | Working | SQLite WAL mode, 10s timeout              |
-| Capture stores   | Working | 24h rolling cleanup, hourly sweep         |
-| Auth system      | Working | Session cookies + API key                 |
-| WebSocket stream | Working | Auto-reconnect with exponential backoff   |
-| Systemd service  | Working | Auto-restart, 5 attempts per 5 min        |
-| Tests            | 15 files| pytest, good coverage of core modules     |
+| Component        | Status  | Notes                                                        |
+|------------------|---------|--------------------------------------------------------------|
+| YOLO detection   | Working | yolo26x.pt on GPU, ~7-8 FPS                                  |
+| InsightFace      | Working | buffalo_l, CPU (cuBLAS conflict — see 4.1)                   |
+| OSNet Re-ID      | Working | CPU, match_threshold=0.60, confirmation_count=3              |
+| Body Re-ID       | Working | Track-only fallback for small crops; co-presence exclusion   |
+| Visitor counter  | Working | Real-time session count, immediate DB save on new person     |
+| CCTV connection  | WAITING | Switched to Aneka Walk CAM 1 C1 — awaiting network access    |
+| State persistence| Working | Save on every new visitor + shutdown                         |
+| Atomic writes    | Working | fsync + temp file pattern                                    |
+| Data storage     | Working | SQLite WAL mode, 10s timeout                                 |
+| Capture stores   | Working | 24h rolling cleanup, hourly sweep                            |
+| Auth system      | Working | Session cookies + API key                                    |
+| WebSocket stream | Working | Auto-reconnect with exponential backoff                      |
+| Systemd service  | Working | Auto-restart, 5 attempts per 5 min, port 80                  |
+| HuggingFace model| Working | Offline cache, HF_HUB_OFFLINE=1                              |
+| Tests            | 15 files | pytest, good coverage of core modules                       |
 
-### Resource Usage (current)
+### Resource Usage (last measured)
 - RAM: ~5 GB / 32 GB (16%)
 - GPU VRAM: ~809 MB / 6 GB (13%)
 - GPU utilization: ~71%
 - Disk: 32 GB / 410 GB (8%)
-- CPU: moderate (uvicorn + inference)
+- Server public IP: 175.143.105.193
+- Server local IP: 10.0.50.33
