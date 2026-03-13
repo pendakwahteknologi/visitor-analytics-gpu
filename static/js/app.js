@@ -380,10 +380,26 @@ class CCTVApp {
             this._setText(this.fpsValue, stats.current.fps || 0);
 
             const todaySaved = stats.today_saved || {};
-            const totalToday = todaySaved.total_visitors || 0;
-            const maleTotal = todaySaved.male || 0;
-            const femaleTotal = todaySaved.female || 0;
-            const unknownTotal = todaySaved.unknown || 0;
+            const session = stats.session || {};
+
+            // Live session count is primary; today_saved acts as floor after service restart
+            const sessionTotal = session.total_detected || 0;
+            const savedTotal   = todaySaved.total_visitors || 0;
+            const totalToday   = Math.max(sessionTotal, savedTotal);
+
+            // Gender: use session counts when available, fall back to saved
+            const sessionMale   = session.male_detected   || 0;
+            const sessionFemale = session.female_detected || 0;
+            let maleTotal, femaleTotal, unknownTotal;
+            if (sessionTotal > 0) {
+                maleTotal    = sessionMale;
+                femaleTotal  = sessionFemale;
+                unknownTotal = Math.max(0, totalToday - sessionMale - sessionFemale);
+            } else {
+                maleTotal    = todaySaved.male    || 0;
+                femaleTotal  = todaySaved.female  || 0;
+                unknownTotal = todaySaved.unknown  || 0;
+            }
             const totalGenderDetected = maleTotal + femaleTotal + unknownTotal;
 
             this._setText(this.totalVisitors, totalToday);
@@ -401,7 +417,8 @@ class CCTVApp {
                 this._setText(this.unknownPercent, '0%');
             }
 
-            const ageGroups = todaySaved.age_groups || {};
+            // Age groups: prefer session data, fall back to saved
+            const ageGroups = (sessionTotal > 0 ? session.age_groups : todaySaved.age_groups) || {};
             this._setText(this.ageChildren, ageGroups['Children'] || 0);
             this._setText(this.ageTeens, ageGroups['Teens'] || 0);
             this._setText(this.ageYoungAdults, ageGroups['Young Adults'] || 0);

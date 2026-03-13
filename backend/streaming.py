@@ -360,7 +360,9 @@ class StreamManager:
                             x1, y1, x2, y2 = det.bbox
                             crop = resized_frame[y1:y2, x1:x2]
                             if crop.size > 0:
-                                gender = self.detection_engine.body_gender.predict(crop)
+                                gender = await _loop.run_in_executor(
+                                    None, self.detection_engine.body_gender.predict, crop
+                                )
 
                         if gender and gender != "Unknown":
                             self.detection_engine.body_tracker.attach_gender(
@@ -381,9 +383,7 @@ class StreamManager:
                         if isinstance(body_emb, Exception):
                             body_emb = None
 
-                        # Skip crops too small for OSNet (avoids _count_only inflation)
-                        if body_emb is None and self.detection_engine.osnet.available:
-                            continue
+                        # Small crops (body_emb is None) are now handled via track_id-only Re-ID
 
                         gender    = analysis.get("gender") if analysis else None
                         age       = analysis.get("age") if analysis else None
@@ -394,7 +394,9 @@ class StreamManager:
                             x1, y1, x2, y2 = det.bbox
                             crop = resized_frame[y1:y2, x1:x2]
                             if crop.size > 0:
-                                gender = self.detection_engine.body_gender.predict(crop)
+                                gender = await _loop.run_in_executor(
+                                    None, self.detection_engine.body_gender.predict, crop
+                                )
 
                         is_new, person_id = self.detection_engine.body_tracker.check_person(
                             body_emb,
@@ -420,6 +422,9 @@ class StreamManager:
                                     await self._broadcast_person_capture(person_record)
                             except Exception as e:
                                 logger.error("Person capture error: %s", e)
+                            # Flush new unique person count to DB immediately
+                            self._save_stats_now()
+                            last_save_time = time.time()
 
                         elif not is_new and person_id is not None:
                             if gender and gender != "Unknown":
@@ -498,6 +503,22 @@ class StreamManager:
             elapsed = time.time() - loop_start
             if elapsed < self.frame_interval:
                 await asyncio.sleep(self.frame_interval - elapsed)
+
+    def _save_stats_now(self) -> None:
+        """Immediately persist current visitor stats to DB."""
+        if not self.data_storage:
+            return
+        try:
+            visitor_stats = self.detection_engine.get_visitor_stats()
+            self.data_storage.save_current_stats(
+                visitor_stats["total_visitors"],
+                visitor_stats["male"],
+                visitor_stats["female"],
+                visitor_stats["age_groups"],
+                visitor_stats.get("unknown", 0),
+            )
+        except Exception as e:
+            logger.error("Immediate DB save failed: %s", e)
 
     def get_stats(self) -> dict:
         """Get current frame stats and visitor statistics."""

@@ -907,6 +907,8 @@ class BodyReIDTracker:
         self.persons: Dict[int, dict] = {}
         self.pending: Dict = {}
         self.track_to_person: Dict[int, int] = {}
+        self.track_only_pending: Dict[int, int] = {}
+        # track_id → seen_count for crops too small for OSNet embedding
         # ByteTrack track_id → confirmed person_id. In-memory only; rebuilt on restart.
         self.next_person_id: int = 1
         self.stats: Dict = {
@@ -963,12 +965,24 @@ class BodyReIDTracker:
         """Unlocked implementation of check_person (caller holds self.lock)."""
         # Fast path: track already confirmed this session — no cosine needed
         if track_id is not None and track_id in self.track_to_person:
-            return (False, self.track_to_person[track_id])
+            person_id = self.track_to_person[track_id]
+            # Upgrade a track-only record with a real embedding when one arrives
+            if body_embedding is not None:
+                person = self.persons.get(person_id)
+                if person and person.get("track_only"):
+                    person["embeddings"] = self._update_embeddings(
+                        person["embeddings"], body_embedding
+                    )
+                    person.pop("track_only", None)
+                    person["timestamp"] = time.time()
+            return (False, person_id)
 
         now = time.time()
         self._evict_expired(now)
 
         if body_embedding is None:
+            if track_id is not None:
+                return self._track_only_check(track_id, gender, age, age_group)
             return self._count_only(gender, age, age_group)
 
         # 1. Match against confirmed persons
@@ -1057,6 +1071,7 @@ class BodyReIDTracker:
         with self.lock:
             self.track_to_person.pop(track_id, None)
             self.pending.pop(track_id, None)
+            self.track_only_pending.pop(track_id, None)
 
     def reset(self) -> None:
         """Clear all state and reset stats to zero."""
@@ -1064,6 +1079,7 @@ class BodyReIDTracker:
             self.persons = {}
             self.pending = {}
             self.track_to_person = {}
+            self.track_only_pending = {}
             self.next_person_id = 1
             self.stats = {
                 "total_visitors": 0, "male": 0, "female": 0, "unknown": 0,
@@ -1153,6 +1169,65 @@ class BodyReIDTracker:
             self.save_state()
 
         return person_id
+
+    def _track_only_check(
+        self,
+        track_id: int,
+        gender: Optional[str],
+        age: Optional[int],
+        age_group: Optional[str],
+    ) -> Tuple[bool, Optional[int]]:
+        """Identify small persons (no OSNet embedding) using track_id alone.
+
+        Accumulates a seen_count per track_id. After confirmation_count frames
+        the person is promoted to confirmed. If OSNet later produces an embedding
+        for the same track_id, the fast-path in _check_person_unlocked upgrades
+        the record with a real embedding — no double-count.
+        """
+        # Already confirmed (may have been upgraded by embedding path)
+        if track_id in self.track_to_person:
+            return (False, self.track_to_person[track_id])
+
+        count = self.track_only_pending.get(track_id, 0) + 1
+        self.track_only_pending[track_id] = count
+
+        if count < self.confirmation_count:
+            return (False, None)
+
+        # Confirmed — promote to a person record (no embeddings yet)
+        if len(self.persons) >= self.MAX_ACTIVE_PERSONS:
+            oldest = min(self.persons, key=lambda p: self.persons[p]["timestamp"])
+            del self.persons[oldest]
+
+        person_id = self.next_person_id
+        self.next_person_id += 1
+        resolved_gender = gender if gender and gender != "Unknown" else None
+        resolved_ag = age_group or "Unknown"
+        self.persons[person_id] = {
+            "embeddings": [],
+            "timestamp": time.time(),
+            "gender": resolved_gender,
+            "age_obs": [age] if age is not None else [],
+            "age_group": resolved_ag,
+            "track_only": True,
+        }
+        self.stats["total_visitors"] += 1
+        if resolved_gender == "Male":
+            self.stats["male"] += 1
+        elif resolved_gender == "Female":
+            self.stats["female"] += 1
+        else:
+            self.stats["unknown"] += 1
+        self.stats["age_groups"][resolved_ag] = (
+            self.stats["age_groups"].get(resolved_ag, 0) + 1
+        )
+        self.track_to_person[track_id] = person_id
+        del self.track_only_pending[track_id]
+        logger.info(
+            "New track-only person #%d (track_id=%d, gender=%s)",
+            person_id, track_id, resolved_gender or "Unknown",
+        )
+        return (True, person_id)
 
     def _count_only(
         self,
