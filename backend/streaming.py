@@ -404,6 +404,7 @@ class StreamManager:
                             gender=gender,
                             age=age,
                             age_group=age_group,
+                            active_track_ids=current_track_ids,
                         )
 
                         if person_id is not None:

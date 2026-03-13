@@ -943,8 +943,14 @@ class BodyReIDTracker:
         gender: Optional[str] = None,
         age: Optional[int] = None,
         age_group: Optional[str] = None,
+        active_track_ids: Optional[set] = None,
     ) -> Tuple[bool, Optional[int]]:
         """Check if this body embedding is a new or known person.
+
+        Args:
+            active_track_ids: All ByteTrack IDs visible in the current frame.
+                Used for co-presence exclusion — if a confirmed person is already
+                tracked under a different active track_id, they cannot be this person.
 
         Returns:
             (True, person_id)  — just confirmed as new unique person
@@ -952,7 +958,7 @@ class BodyReIDTracker:
             (False, None)      — still pending or no match yet
         """
         with self.lock:
-            return self._check_person_unlocked(body_embedding, track_id, gender, age, age_group)
+            return self._check_person_unlocked(body_embedding, track_id, gender, age, age_group, active_track_ids)
 
     def _check_person_unlocked(
         self,
@@ -961,6 +967,7 @@ class BodyReIDTracker:
         gender: Optional[str],
         age: Optional[int],
         age_group: Optional[str],
+        active_track_ids: Optional[set] = None,
     ) -> Tuple[bool, Optional[int]]:
         """Unlocked implementation of check_person (caller holds self.lock)."""
         # Fast path: track already confirmed this session — no cosine needed
@@ -989,6 +996,23 @@ class BodyReIDTracker:
         for person_id, person in self.persons.items():
             score = self._best_score(body_embedding, person["embeddings"])
             if score >= self.match_threshold:
+                # Co-presence exclusion: if this confirmed person is currently tracked
+                # under a DIFFERENT active track_id, they physically cannot be the same
+                # person as the one we're checking (two people can't share one body).
+                if active_track_ids and track_id is not None:
+                    confirmed_track = next(
+                        (tid for tid, pid in self.track_to_person.items() if pid == person_id),
+                        None
+                    )
+                    if (confirmed_track is not None
+                            and confirmed_track != track_id
+                            and confirmed_track in active_track_ids):
+                        logger.info(
+                            "Co-presence: track %d resembles person #%d (score=%.2f) "
+                            "but person #%d is already active as track %d — treating as new",
+                            track_id, person_id, score, person_id, confirmed_track
+                        )
+                        continue  # skip — they're different people in the same frame
                 person["timestamp"] = now
                 person["embeddings"] = self._update_embeddings(
                     person["embeddings"], body_embedding
