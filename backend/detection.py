@@ -203,27 +203,15 @@ class InsightFaceAnalyzer:
         try:
             from insightface.app import FaceAnalysis
 
+            # Force CPU to avoid cuBLAS version conflict between ONNX Runtime
+            # and PyTorch (YOLO owns the GPU for inference)
             self.app = FaceAnalysis(
                 name=self.model_name,
-                providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
+                providers=['CPUExecutionProvider']
             )
-            self.app.prepare(ctx_id=0, det_size=(1024, 1024))
+            self.app.prepare(ctx_id=-1, det_size=(1024, 1024))
             self.model_loaded = True
-            logger.info(f"InsightFace analyzer initialized ({self.model_name} model)")
-        except (RuntimeError, OSError, ValueError) as e:
-            logger.error(f"Failed to initialize InsightFace with {self.model_name}: {e}")
-            try:
-                from insightface.app import FaceAnalysis
-                self.app = FaceAnalysis(
-                    name=self.model_name,
-                    providers=['CPUExecutionProvider']
-                )
-                self.app.prepare(ctx_id=-1, det_size=(1024, 1024))
-                self.model_loaded = True
-                logger.info(f"InsightFace analyzer initialized ({self.model_name} - CPU mode)")
-            except (ImportError, RuntimeError, OSError, ValueError) as e2:
-                logger.error(f"Failed to initialize InsightFace (CPU): {e2}")
-                raise
+            logger.info(f"InsightFace analyzer initialized ({self.model_name} model, CPU)")
         except ImportError as e:
             logger.error(f"InsightFace package not available: {e}")
             raise

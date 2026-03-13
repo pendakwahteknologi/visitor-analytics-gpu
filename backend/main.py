@@ -163,17 +163,17 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "img-src 'self' data:; "
+            "img-src 'self' data: blob:; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com; "
-            "connect-src 'self' ws: wss:; "
+            "connect-src 'self' ws:; "
             "script-src 'self'; "
             "frame-ancestors 'none'"
         )
-        # Cache static assets for 1 day
+        # Cache static assets for 1 hour (versioned via ?v= query param)
         path = request.url.path
         if path.startswith("/static/"):
-            response.headers["Cache-Control"] = "public, max-age=86400"
+            response.headers["Cache-Control"] = "public, max-age=3600"
         return response
 
 
@@ -272,19 +272,31 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to auto-start monitoring: {e}")
 
-    async def _face_cleanup_loop():
+    async def _midnight_cleanup_loop():
+        """Clear all face and person captures daily at midnight."""
         while True:
-            await asyncio.sleep(3600)
-            try:
-                deleted = stream_manager.face_store.cleanup_expired()
-                if deleted:
-                    logger.info("Face capture cleanup: deleted %d expired files", deleted)
-            except Exception as e:
-                logger.error("Face capture cleanup error: %s", e)
+            now = datetime.now()
+            tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            if tomorrow <= now:
+                tomorrow += __import__("datetime").timedelta(days=1)
+            seconds_until_midnight = (tomorrow - now).total_seconds()
+            logger.info("Midnight cleanup scheduled in %.0f seconds", seconds_until_midnight)
+            await asyncio.sleep(seconds_until_midnight)
 
-    cleanup_task = asyncio.create_task(_face_cleanup_loop())
+            try:
+                face_deleted = stream_manager.face_store.clear_all()
+                person_deleted = stream_manager.person_store.clear_all()
+                logger.info(
+                    "Midnight cleanup: deleted %d face captures, %d person captures",
+                    face_deleted, person_deleted,
+                )
+            except Exception as e:
+                logger.error("Midnight cleanup error: %s", e)
+
+    cleanup_task = asyncio.create_task(_midnight_cleanup_loop())
 
     async def _person_cleanup_loop():
+        """Fallback hourly cleanup for expired captures (24h age limit)."""
         while True:
             await asyncio.sleep(3600)
             try:
@@ -417,7 +429,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
             max_age=SESSION_MAX_AGE,
             httponly=True,
             samesite="lax",
-            secure=request.url.scheme == "https",
+            secure=False,
         )
         logger.info(f"User '{username}' logged in from {request.client.host}")
         return response
@@ -675,25 +687,6 @@ async def get_person_image(filename: str):
         raise HTTPException(status_code=404, detail="Not found")
     return FileResponse(path, media_type="image/jpeg")
 
-
-@app.get("/rootCA.pem", include_in_schema=False)
-async def download_ca():
-    """Serve the mkcert root CA certificate for client installation."""
-    ca_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "certs", "rootCA.pem")
-    return FileResponse(ca_path, media_type="application/x-pem-file", filename="visitor-analytics-CA.pem")
-
-
-@app.get("/proxy.pac", include_in_schema=False)
-async def proxy_pac():
-    """Serve a PAC file that bypasses proxy for this server."""
-    pac = """function FindProxyForURL(url, host) {
-    if (host === "visitor-analysis.local") return "DIRECT";
-    if (isInNet(dnsResolve(host), "10.0.0.0", "255.0.0.0") ||
-        isInNet(dnsResolve(host), "172.16.0.0", "255.240.0.0") ||
-        isInNet(dnsResolve(host), "192.168.0.0", "255.255.0.0")) return "DIRECT";
-    return "USEPROXY";
-}"""
-    return PlainTextResponse(pac, media_type="application/x-ns-proxy-autoconfig")
 
 
 @app.get("/detect-all")

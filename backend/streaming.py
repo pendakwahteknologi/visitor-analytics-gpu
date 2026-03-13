@@ -1,6 +1,5 @@
 import cv2
 import asyncio
-import base64
 import json
 import logging
 import os
@@ -32,15 +31,15 @@ class ConnectionManager:
         self.active_connections.discard(websocket)
         logger.info(f"Client disconnected. Total connections: {len(self.active_connections)}")
 
-    async def broadcast_frame(self, frame_data: str):
-        """Broadcast frame to all connected clients."""
+    async def broadcast_bytes(self, data: bytes):
+        """Broadcast binary frame to all connected clients."""
         if not self.active_connections:
             return
 
         disconnected = set()
         for connection in self.active_connections:
             try:
-                await connection.send_text(frame_data)
+                await connection.send_bytes(data)
             except Exception as e:
                 logger.warning(f"Failed to send frame: {e}")
                 disconnected.add(connection)
@@ -49,26 +48,29 @@ class ConnectionManager:
         for conn in disconnected:
             self.active_connections.discard(conn)
 
-    async def broadcast_status(self, status_data: Dict[str, Any]):
-        """Broadcast connection status to all connected clients."""
+    async def broadcast_text(self, message: str):
+        """Broadcast text message (status, captures) to all connected clients."""
         if not self.active_connections:
             return
-
-        message = json.dumps({
-            "type": "status",
-            "data": status_data
-        })
 
         disconnected = set()
         for connection in self.active_connections:
             try:
                 await connection.send_text(message)
             except Exception as e:
-                logger.warning(f"Failed to send status: {e}")
+                logger.warning(f"Failed to send text: {e}")
                 disconnected.add(connection)
 
         for conn in disconnected:
             self.active_connections.discard(conn)
+
+    async def broadcast_status(self, status_data: Dict[str, Any]):
+        """Broadcast connection status to all connected clients."""
+        message = json.dumps({
+            "type": "status",
+            "data": status_data
+        })
+        await self.broadcast_text(message)
 
     @property
     def connection_count(self) -> int:
@@ -76,8 +78,8 @@ class ConnectionManager:
         return len(self.active_connections)
 
 
-def encode_frame_to_base64(frame, quality: int = JPEG_QUALITY, max_width: int = 1280) -> str:
-    """Encode a frame to base64 JPEG string with JSON envelope."""
+def encode_frame_to_jpeg(frame, quality: int = JPEG_QUALITY, max_width: int = 1280) -> bytes:
+    """Encode a frame to raw JPEG bytes."""
     height, width = frame.shape[:2]
     if width > max_width:
         scale = max_width / width
@@ -87,12 +89,7 @@ def encode_frame_to_base64(frame, quality: int = JPEG_QUALITY, max_width: int = 
 
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
     _, buffer = cv2.imencode('.jpg', frame, encode_param)
-    base64_frame = base64.b64encode(buffer).decode('utf-8')
-
-    return json.dumps({
-        "type": "frame",
-        "data": base64_frame
-    })
+    return buffer.tobytes()
 
 
 class StreamManager:
@@ -465,15 +462,13 @@ class StreamManager:
                     self.current_stats["unknown"] = stats["unknown"]
                     self.current_stats["age_groups"] = stats["age_groups"]
 
-                # Annotate and broadcast frame
-                annotated_frame = self.detection_engine.person_detector.draw_detections(
-                    resized_frame, detections
-                )
-
-                # Only broadcast frames if CCTV is connected
-                if self.cctv_handler.connection_state == "connected":
-                    frame_data = encode_frame_to_base64(annotated_frame, quality=70, max_width=1280)
-                    await self.connection_manager.broadcast_frame(frame_data)
+                # Annotate and broadcast frame (skip work when nobody is watching)
+                if self.cctv_handler.connection_state == "connected" and self.connection_manager.connection_count > 0:
+                    annotated_frame = self.detection_engine.person_detector.draw_detections(
+                        resized_frame, detections
+                    )
+                    jpeg_bytes = encode_frame_to_jpeg(annotated_frame, quality=70, max_width=1280)
+                    await self.connection_manager.broadcast_bytes(jpeg_bytes)
 
                 fps_counter += 1
 
@@ -543,7 +538,7 @@ class StreamManager:
                 "is_new_visitor": record["is_new_visitor"],
             }
         })
-        await self.connection_manager.broadcast_frame(message)
+        await self.connection_manager.broadcast_text(message)
 
     async def _broadcast_person_capture(self, record: dict) -> None:
         """Broadcast a person_capture event to all connected WebSocket clients."""
@@ -560,7 +555,7 @@ class StreamManager:
                 "is_new": record["is_new"],
             }
         })
-        await self.connection_manager.broadcast_frame(message)
+        await self.connection_manager.broadcast_text(message)
 
     def reset_session_stats(self):
         """Reset visitor tracking statistics."""

@@ -8,6 +8,11 @@ class CCTVApp {
         this.clockInterval = null;
         this.reconnectAttempts = 0;
 
+        // Frame rendering state (Blob URL + rAF)
+        this.prevFrameUrl = null;
+        this.latestFrameBlob = null;
+        this.rafPending = false;
+
         // API key (optional — for programmatic access; browser uses session cookie)
         const meta = document.querySelector('meta[name="api-key"]');
         this.apiKey = meta ? meta.getAttribute('content') : '';
@@ -238,15 +243,26 @@ class CCTVApp {
             this.reconnectAttempts = 0;
         };
 
+        this.ws.binaryType = 'blob';
+
         this.ws.onmessage = (event) => {
             try {
+                // Binary message = raw JPEG frame
+                if (event.data instanceof Blob) {
+                    if (this.cctvConnected) {
+                        this.latestFrameBlob = event.data;
+                        if (!this.rafPending) {
+                            this.rafPending = true;
+                            requestAnimationFrame(() => this._renderFrame());
+                        }
+                    }
+                    return;
+                }
+
+                // Text message = JSON (status, captures)
                 const message = JSON.parse(event.data);
 
-                if (message.type === 'frame') {
-                    if (this.cctvConnected) {
-                        this.videoFeed.src = `data:image/jpeg;base64,${message.data}`;
-                    }
-                } else if (message.type === 'status') {
+                if (message.type === 'status') {
                     this.handleCCTVStatus(message.data);
                 } else if (message.type === 'face_capture') {
                     this.prependFaceTile(message.data);
@@ -262,6 +278,13 @@ class CCTVApp {
             this.isStreaming = false;
             this.videoFeed.classList.remove('active');
             this.noFeed.classList.remove('hidden');
+
+            // Clean up Blob URL
+            if (this.prevFrameUrl) {
+                URL.revokeObjectURL(this.prevFrameUrl);
+                this.prevFrameUrl = null;
+            }
+            this.latestFrameBlob = null;
 
             this.reconnectAttempts++;
             const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
@@ -321,9 +344,25 @@ class CCTVApp {
         }
     }
 
+    _renderFrame() {
+        this.rafPending = false;
+        const blob = this.latestFrameBlob;
+        if (!blob) return;
+        this.latestFrameBlob = null;
+
+        const url = URL.createObjectURL(blob);
+        if (this.prevFrameUrl) {
+            URL.revokeObjectURL(this.prevFrameUrl);
+        }
+        this.videoFeed.src = url;
+        this.videoFeed.classList.add('active');
+        this.noFeed.classList.add('hidden');
+        this.prevFrameUrl = url;
+    }
+
     startStatsPolling() {
         this.fetchStats();
-        this.statsInterval = setInterval(() => this.fetchStats(), 1000);
+        this.statsInterval = setInterval(() => this.fetchStats(), 5000);
     }
 
     startPeriodStatsPolling() {

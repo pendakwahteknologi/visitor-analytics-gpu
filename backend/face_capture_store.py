@@ -87,6 +87,31 @@ class FaceCaptureStore:
         index.sort(key=lambda r: r.get("timestamp", 0), reverse=True)
         return index[:limit]
 
+    def clear_all(self) -> int:
+        """Delete ALL capture files and clear the index. Returns count deleted."""
+        index = self._load_index()
+        deleted_count = 0
+        for record in index:
+            try:
+                safe_filename = os.path.basename(record["filename"])
+                os.remove(os.path.join(self.capture_dir, safe_filename))
+                deleted_count += 1
+            except FileNotFoundError:
+                pass
+
+        # Also remove any .jpg not tracked in the index
+        for fname in os.listdir(self.capture_dir):
+            if fname.endswith(".jpg"):
+                try:
+                    os.remove(os.path.join(self.capture_dir, fname))
+                    deleted_count += 1
+                except FileNotFoundError:
+                    pass
+
+        self._write_index([])
+        self._last_capture_time.clear()
+        return deleted_count
+
     def cleanup_expired(self, max_age_seconds: float = 86400) -> int:
         """Delete files and index entries older than max_age_seconds."""
         now = time.time()
